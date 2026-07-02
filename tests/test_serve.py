@@ -1,28 +1,30 @@
 """Tests for serve.py - MCP graph query helpers (no mcp package required)."""
 import json
-import pytest
+
 import networkx as nx
+import pytest
 from networkx.readwrite import json_graph
 
 from graphify.serve import (
-    _communities_from_graph,
-    _score_nodes,
-    _compute_idf,
-    _pick_seeds,
     _bfs,
+    _communities_from_graph,
+    _compute_idf,
     _dfs,
-    _find_node,
-    _trigrams,
-    _node_search_text,
-    _get_trigram_index,
-    _trigram_candidates,
     _filter_graph_by_context,
+    _find_node,
+    _format_call_edges,
+    _get_trigram_index,
     _infer_context_filters,
-    _query_terms,
-    _query_graph_text,
-    _resolve_context_filters,
-    _subgraph_to_text,
     _load_graph,
+    _node_search_text,
+    _pick_seeds,
+    _query_graph_text,
+    _query_terms,
+    _resolve_context_filters,
+    _score_nodes,
+    _subgraph_to_text,
+    _trigram_candidates,
+    _trigrams,
 )
 
 
@@ -427,7 +429,6 @@ def _write_graph(path, nodes: list[str]) -> None:
 def test_maybe_reload_detects_graph_change(tmp_path):
     """serve() picks up a new graph.json written after startup (#874)."""
     import time
-    from unittest.mock import patch
 
     out = tmp_path / "graphify-out"
     out.mkdir()
@@ -511,7 +512,6 @@ def test_idf_new_graph_starts_fresh():
 
 def test_idf_rare_term_gets_high_weight():
     """A term matching only 1 of N nodes should get IDF > 1."""
-    import math
     G = _make_graph()  # 5 nodes
     idf = _compute_idf(G, ["extract"])
     # extract matches only n1: IDF = log(1 + 5/2) ≈ 1.25
@@ -520,7 +520,6 @@ def test_idf_rare_term_gets_high_weight():
 
 def test_idf_common_term_gets_low_weight():
     """A term matching most nodes should get IDF < 1."""
-    import math
     G = nx.Graph()
     # 'handle' in every node label
     for i in range(20):
@@ -583,6 +582,7 @@ def test_query_seeds_from_identifier_not_noise():
 
 def test_query_graph_text_parameter_type_context_filter_changes_traversal():
     import networkx as nx
+
     from graphify.serve import _query_graph_text
 
     graph = nx.Graph()
@@ -600,7 +600,6 @@ def test_query_graph_text_parameter_type_context_filter_changes_traversal():
 
 
 def test_query_graph_text_context_filter_aliases_resolve():
-    import networkx as nx
     from graphify.serve import _normalize_context_filters
 
     assert _normalize_context_filters(["param"]) == ["parameter_type"]
@@ -682,3 +681,63 @@ def test_query_text_chinese_finds_routing_nodes():
     text = _query_graph_text(G, "页面路由", mode="bfs", depth=2)
     assert "No matching nodes found." not in text
     assert "路由" in text
+
+
+# --- _format_call_edges (find_callers / find_callees) ---
+
+def _make_call_graph() -> nx.DiGraph:
+    """a() -> b() -> c(); a() -> c(). Served graph is always directed."""
+    G = nx.DiGraph()
+    for nid in ("a", "b", "c", "cfg"):
+        G.add_node(nid, label=f"{nid}()", source_file="m.py", source_location="L1")
+    G.add_edge("a", "b", relation="calls", confidence="EXTRACTED",
+               source_file="m.py", source_location="L10")
+    G.add_edge("b", "c", relation="calls", confidence="INFERRED",
+               source_file="m.py", source_location="L20")
+    G.add_edge("a", "c", relation="calls", confidence="EXTRACTED",
+               source_file="m.py", source_location="L11")
+    # a non-call edge (distinct endpoints) that must be excluded from both directions
+    G.add_edge("a", "cfg", relation="imports", confidence="EXTRACTED")
+    return G
+
+
+def test_find_callees_lists_outgoing_calls():
+    G = _make_call_graph()
+    out = _format_call_edges(G, "a", incoming=False)
+    assert "a() calls 2 function(s):" in out
+    assert "--> b()" in out and "(m.py:L10)" in out
+    assert "--> c()" in out
+    assert "[EXTRACTED]" in out
+
+
+def test_find_callers_lists_incoming_calls():
+    G = _make_call_graph()
+    out = _format_call_edges(G, "c", incoming=True)
+    assert "2 function(s) call c():" in out
+    assert "<-- b()" in out and "[INFERRED]" in out
+    assert "<-- a()" in out
+
+
+def test_find_callees_excludes_non_call_relations():
+    G = _make_call_graph()
+    out = _format_call_edges(G, "a", incoming=False)
+    # the a->b 'imports' edge must not inflate the count or appear
+    assert "calls 2 function(s)" in out
+    assert "imports" not in out
+
+
+def test_find_callers_none():
+    G = _make_call_graph()
+    out = _format_call_edges(G, "a", incoming=True)
+    assert "Nothing calls a()" in out
+
+
+def test_find_callees_none():
+    G = _make_call_graph()
+    out = _format_call_edges(G, "c", incoming=False)
+    assert "c() has no outgoing 'calls' edges." in out
+
+
+def test_find_call_edges_unknown_node():
+    G = _make_call_graph()
+    assert "No node matching 'zzz' found." in _format_call_edges(G, "zzz", incoming=True)

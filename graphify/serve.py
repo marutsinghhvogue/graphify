@@ -1,16 +1,19 @@
 # MCP stdio server - exposes graph query tools to Claude and other agents
 from __future__ import annotations
+
 import json
 import math
 import re
 import sys
 from array import array
 from pathlib import Path
+
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.security import sanitize_label, check_graph_file_size_cap
+
 from graphify.build import edge_data
 from graphify.paths import default_graph_json as _default_graph_json
+from graphify.security import check_graph_file_size_cap, sanitize_label
 
 try:
     import jieba as _jieba  # type: ignore[import-untyped]
@@ -123,7 +126,7 @@ def _compute_idf(G: nx.Graph, terms: list[str]) -> dict[str, float]:
     N = G.number_of_nodes() or 1
     uncached = [t for t in terms if t not in cache]
     if uncached:
-        df: dict[str, int] = {t: 0 for t in uncached}
+        df: dict[str, int] = dict.fromkeys(uncached, 0)
         for _, data in G.nodes(data=True):
             norm_label = (
                 data.get("norm_label") or _strip_diacritics(data.get("label") or "")
@@ -601,6 +604,45 @@ def _find_node(G: nx.Graph, label: str) -> list[str]:
     return exact + prefix + substring
 
 
+def _format_call_edges(G: nx.Graph, label: str, *, incoming: bool) -> str:
+    """Render the 'calls' edges touching the node matching ``label``.
+
+    ``incoming=True`` lists callers (functions that call the node — 'calls'
+    edges pointing *into* it); ``incoming=False`` lists callees (functions the
+    node calls). Directed-graph only, matching the served graph; mirrors the
+    direction handling in ``_tool_get_neighbors``.
+    """
+    matches = _find_node(G, label)
+    if not matches:
+        return f"No node matching '{label}' found."
+    nid = matches[0]
+    name = sanitize_label(G.nodes[nid].get("label", nid))
+    neighbors = G.predecessors(nid) if incoming else G.successors(nid)
+    arrow = "<--" if incoming else "-->"
+    rows: list[str] = []
+    for nb in neighbors:
+        d = edge_data(G, nb, nid) if incoming else edge_data(G, nid, nb)
+        if (d.get("relation") or "").lower() != "calls":
+            continue
+        src = sanitize_label(str(d.get("source_file", "")))
+        loc = sanitize_label(str(d.get("source_location", "")))
+        where = f" ({src}:{loc})" if (src or loc) else ""
+        rows.append(
+            f"  {arrow} {sanitize_label(G.nodes[nb].get('label', nb))}"
+            f"{where} [{sanitize_label(str(d.get('confidence', '')))}]"
+        )
+    if not rows:
+        return (
+            f"Nothing calls {name} (no incoming 'calls' edges)." if incoming
+            else f"{name} has no outgoing 'calls' edges."
+        )
+    header = (
+        f"{len(rows)} function(s) call {name}:" if incoming
+        else f"{name} calls {len(rows)} function(s):"
+    )
+    return "\n".join([header, *rows])
+
+
 def _filter_blank_stdin() -> None:
     """Filter blank lines from stdin before MCP reads it.
 
@@ -628,7 +670,7 @@ def _filter_blank_stdin() -> None:
     threading.Thread(target=_relay, daemon=True).start()
     os.dup2(r_fd, sys.stdin.fileno())
     os.close(r_fd)
-    sys.stdin = open(0, "r", closefd=False)
+    sys.stdin = open(0, closefd=False)
 
 
 def _build_server(graph_path: str):
@@ -642,8 +684,8 @@ def _build_server(graph_path: str):
     import threading
 
     try:
-        from mcp.server import Server
         from mcp import types
+        from mcp.server import Server
         from mcp.types import AnyUrl
     except ImportError as e:
         raise ImportError('mcp not installed. Run: pip install "graphifyy[mcp]"') from e
@@ -740,6 +782,33 @@ def _build_server(graph_path: str):
                 },
             ),
             types.Tool(
+                name="find_callers",
+                description=(
+                    "Find the functions that CALL a given function (incoming 'calls' edges), "
+                    "each with file:line and confidence. Use to gauge who depends on a function "
+                    "before changing it. Note: without a SCIP index some 'calls' edges are "
+                    "INFERRED (heuristic/LLM) rather than EXTRACTED (type-exact)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {"label": {"type": "string", "description": "Function label or node ID"}},
+                    "required": ["label"],
+                },
+            ),
+            types.Tool(
+                name="find_callees",
+                description=(
+                    "Find the functions that a given function CALLS (outgoing 'calls' edges), "
+                    "each with file:line and confidence. Use to understand what a function depends on. "
+                    "Note: without a SCIP index some 'calls' edges are INFERRED rather than EXTRACTED."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {"label": {"type": "string", "description": "Function label or node ID"}},
+                    "required": ["label"],
+                },
+            ),
+            types.Tool(
                 name="get_community",
                 description="Get all nodes in a community by community ID.",
                 inputSchema={
@@ -821,6 +890,7 @@ def _build_server(graph_path: str):
 
     def _tool_query_graph(arguments: dict) -> str:
         import time as _time
+
         from graphify import querylog
         question = arguments["question"]
         mode = arguments.get("mode", "bfs")
@@ -892,6 +962,12 @@ def _build_server(graph_path: str):
                 f"[{sanitize_label(str(rel))}] [{sanitize_label(str(d.get('confidence', '')))}]"
             )
         return "\n".join(lines)
+
+    def _tool_find_callees(arguments: dict) -> str:
+        return _format_call_edges(G, arguments["label"], incoming=False)
+
+    def _tool_find_callers(arguments: dict) -> str:
+        return _format_call_edges(G, arguments["label"], incoming=True)
 
     def _tool_get_community(arguments: dict) -> str:
         cid = int(arguments["community_id"])
@@ -983,7 +1059,7 @@ def _build_server(graph_path: str):
         return prefix + f"Shortest path ({hops} hops):\n  " + " ".join(segments)
 
     def _tool_list_prs(arguments: dict) -> str:
-        from graphify.prs import fetch_prs, fetch_worktrees, format_prs_text, _detect_default_branch
+        from graphify.prs import _detect_default_branch, fetch_prs, fetch_worktrees, format_prs_text
         repo = arguments.get("repo") or None
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
@@ -996,7 +1072,7 @@ def _build_server(graph_path: str):
         return format_prs_text(prs, base)
 
     def _tool_get_pr_impact(arguments: dict) -> str:
-        from graphify.prs import fetch_pr_files, compute_pr_impact, _gh, _parse_ci
+        from graphify.prs import _gh, _parse_ci, compute_pr_impact, fetch_pr_files
         number = int(arguments["pr_number"])
         repo = arguments.get("repo") or None
         # Use gh pr view directly — works for any base branch, not just the default
@@ -1027,7 +1103,15 @@ def _build_server(graph_path: str):
 
     def _tool_triage_prs(arguments: dict) -> str:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from graphify.prs import fetch_prs, fetch_worktrees, fetch_pr_files, compute_pr_impact, _STATUS_ORDER, _detect_default_branch
+
+        from graphify.prs import (
+            _STATUS_ORDER,
+            _detect_default_branch,
+            compute_pr_impact,
+            fetch_pr_files,
+            fetch_prs,
+            fetch_worktrees,
+        )
         repo = arguments.get("repo") or None
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
@@ -1071,6 +1155,8 @@ def _build_server(graph_path: str):
         "query_graph": _tool_query_graph,
         "get_node": _tool_get_node,
         "get_neighbors": _tool_get_neighbors,
+        "find_callers": _tool_find_callers,
+        "find_callees": _tool_find_callees,
         "get_community": _tool_get_community,
         "god_nodes": _tool_god_nodes,
         "graph_stats": _tool_graph_stats,
@@ -1266,12 +1352,11 @@ def _build_http_app(
     try:
         import contextlib
 
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from mcp.server.transport_security import TransportSecuritySettings
         from starlette.applications import Starlette
         from starlette.middleware import Middleware
         from starlette.routing import Route
-
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-        from mcp.server.transport_security import TransportSecuritySettings
     except ImportError as e:
         raise ImportError(
             'HTTP transport needs the mcp extra (mcp + starlette + uvicorn). '
