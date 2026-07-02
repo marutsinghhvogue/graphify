@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 from graphify.extract import extract_sql
 
 
@@ -16,7 +18,7 @@ def introspect_postgres(dsn: str | None = None) -> dict:
         raise ImportError(
             "psycopg is required for --postgres. "
             "Install with: pip install 'graphify[postgres]'"
-        )
+        ) from None
 
     try:
         conn = psycopg.connect(dsn or "")  # empty string = PG* env vars

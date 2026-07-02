@@ -3059,6 +3059,20 @@ def main() -> None:
         p.add_argument("--outcome", choices=("useful", "dead_end", "corrected"), default=None)
         p.add_argument("--correction", default=None)
         p.add_argument("--memory-dir", default=str(Path(_GRAPHIFY_OUT) / "memory"))
+        p.add_argument(
+            "--alias",
+            metavar="FROM=TO",
+            default=None,
+            help="also record that two entities are the same (e.g. --alias User=Customer); "
+            "writes .graphify_aliases.json so the next build links/merges them",
+        )
+        p.add_argument(
+            "--alias-mode",
+            choices=("same_as", "merge"),
+            default="same_as",
+            help="how --alias links the pair: same_as (add edge, default) or merge (fold into one node)",
+        )
+        p.add_argument("--root", default=".", help="repo root for --alias file (default: cwd)")
         opts = p.parse_args(sys.argv[2:])
         from graphify.ingest import save_query_result as _sqr
 
@@ -3072,6 +3086,27 @@ def main() -> None:
             correction=opts.correction,
         )
         print(f"Saved to {out}")
+        if opts.alias:
+            if "=" not in opts.alias:
+                print("error: --alias must be FROM=TO (e.g. User=Customer)", file=sys.stderr)
+                sys.exit(1)
+            _frm, _to = (s.strip() for s in opts.alias.split("=", 1))
+            from datetime import datetime, timezone
+
+            from graphify.aliases import append_alias as _append_alias
+
+            _entry = _append_alias(
+                opts.root,
+                _frm,
+                _to,
+                mode=opts.alias_mode,
+                reason=opts.correction or opts.question,
+                date=datetime.now(timezone.utc).isoformat(),
+            )
+            print(
+                f"Recorded alias {_entry['from']!r} {_entry['mode']} {_entry['to']!r} "
+                f"in {Path(opts.root) / '.graphify_aliases.json'} (takes effect on next build)"
+            )
     elif cmd == "reflect":
         import argparse as _ap
 
@@ -3120,6 +3155,30 @@ def main() -> None:
                 f"({c['useful']} useful, {c['dead_end']} dead ends, "
                 f"{c['corrected']} corrected) -> {out_path}"
             )
+    elif cmd == "serve-web":
+        # graphify serve-web [--graph path] [--host H] [--port N] [--root DIR]
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify serve-web")
+        p.add_argument("--graph", default=None, help="graph.json to serve (default: graphify-out/graph.json)")
+        p.add_argument("--host", default="127.0.0.1")
+        p.add_argument("--port", type=int, default=8756)
+        p.add_argument("--root", default=".", help="repo root for the alias file (default: cwd)")
+        opts = p.parse_args(sys.argv[2:])
+
+        graph_path = opts.graph or _default_graph_path()
+        gp = Path(graph_path).resolve()
+        if not gp.exists():
+            print(f"error: graph file not found: {gp}", file=sys.stderr)
+            sys.exit(1)
+        _enforce_graph_size_cap_or_exit(gp)
+        try:
+            from graphify.webapi import run_web
+        except ImportError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Serving graphify JSON API on http://{opts.host}:{opts.port}  (graph: {gp})")
+        run_web(str(gp), host=opts.host, port=opts.port, root=opts.root)
     elif cmd == "path":
         if len(sys.argv) < 4:
             print(

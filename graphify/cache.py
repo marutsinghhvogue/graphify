@@ -175,7 +175,7 @@ def file_hash(path: Path, root: Path = Path(".")) -> str:
 
     _ensure_stat_index(root)
     abs_key = str(p.resolve())
-    st: "os.stat_result | None" = None
+    st: os.stat_result | None = None
     try:
         st = p.stat()
         entry = _stat_index.get(abs_key)

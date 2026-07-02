@@ -1,7 +1,18 @@
 import unicodedata
 from pathlib import Path
-from graphify.detect import classify_file, count_words, detect, detect_incremental, save_manifest, FileType, _looks_like_paper, _is_ignored, _load_graphifyignore, _is_sensitive
+
 from graphify import detect as detect_mod
+from graphify.detect import (
+    FileType,
+    _is_ignored,
+    _is_sensitive,
+    _load_graphifyignore,
+    classify_file,
+    count_words,
+    detect,
+    detect_incremental,
+    save_manifest,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -510,7 +521,6 @@ def test_detect_skips_graphify_own_cache(tmp_path):
 
 def test_negation_cannot_rescue_file_under_excluded_dir(tmp_path):
     """A ! re-include cannot un-ignore a file whose parent dir is excluded (#882)."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     android = tmp_path / "android" / "app" / "src"
     android.mkdir(parents=True)
     victim = android / "Main.kt"
@@ -525,7 +535,6 @@ def test_negation_cannot_rescue_file_under_excluded_dir(tmp_path):
 
 def test_negation_works_when_no_ancestor_excluded(tmp_path):
     """A ! re-include must still un-ignore a file when no ancestor is excluded (#882)."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     src = tmp_path / "src"
     src.mkdir()
     keep = src / "keep.py"
@@ -539,7 +548,6 @@ def test_negation_works_when_no_ancestor_excluded(tmp_path):
 
 def test_negation_ancestor_itself_reincluded(tmp_path):
     """If the ancestor dir itself is re-included, its children should not be blocked (#882)."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     vendor = tmp_path / "vendor" / "lib"
     vendor.mkdir(parents=True)
     f = vendor / "utils.py"
@@ -561,6 +569,7 @@ def test_negation_does_not_disable_directory_pruning(tmp_path, monkeypatch):
     be descended, while the negation must still re-include its target.
     """
     import os
+
     import graphify.detect as det
 
     (tmp_path / ".graphifyignore").write_text("myignored/\n*.md\n!docs/**\n")
@@ -599,7 +608,6 @@ def test_negation_does_not_disable_directory_pruning(tmp_path, monkeypatch):
 
 def test_anchored_dir_not_matched_at_depth(tmp_path):
     """/inbox/ must not match src/inbox/ — only inbox/ at the anchor root."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     src_inbox = tmp_path / "src" / "inbox"
     src_inbox.mkdir(parents=True)
     f = src_inbox / "main.rs"
@@ -616,7 +624,6 @@ def test_anchored_dir_not_matched_at_depth(tmp_path):
 
 def test_anchored_dir_matches_at_root(tmp_path):
     """/inbox/ must still match inbox/ at the anchor root (positive case)."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     f = inbox / "data.json"
@@ -633,7 +640,6 @@ def test_anchored_dir_matches_at_root(tmp_path):
 
 def test_anchored_file_not_matched_at_depth(tmp_path):
     """/build must not match src/build."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     src_build = tmp_path / "src" / "build"
     src_build.mkdir(parents=True)
     (tmp_path / ".graphifyignore").write_text("/build\n")
@@ -645,7 +651,6 @@ def test_anchored_file_not_matched_at_depth(tmp_path):
 
 def test_unanchored_dir_still_matches_at_depth(tmp_path):
     """inbox/ (no leading /) must still match src/inbox/ anywhere in the tree."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     src_inbox = tmp_path / "src" / "inbox"
     src_inbox.mkdir(parents=True)
     f = src_inbox / "main.rs"
@@ -659,7 +664,6 @@ def test_unanchored_dir_still_matches_at_depth(tmp_path):
 
 def test_anchored_multi_segment_pattern(tmp_path):
     """/src/inbox/ must match src/inbox/ but not x/src/inbox/."""
-    from graphify.detect import _is_ignored, _load_graphifyignore
     (tmp_path / "src" / "inbox").mkdir(parents=True)
     (tmp_path / "x" / "src" / "inbox").mkdir(parents=True)
     target_ok = tmp_path / "src" / "inbox" / "a.py"
@@ -685,7 +689,6 @@ def test_is_ignored_cache_matches_uncached_results(tmp_path):
     asserts that evaluating every path with a cache yields identical results
     to evaluating without one (#1235).
     """
-    from graphify.detect import _is_ignored, _load_graphifyignore
 
     # Normal pattern: ignore everything under build/.
     # Negation pattern: re-include logs/keep.log even though *.log is ignored.
@@ -730,7 +733,6 @@ def test_is_ignored_cache_evaluates_each_dir_once():
     cache: every directory (ancestor) should be evaluated exactly once across
     a multi-file subtree rather than once per descendant file.
     """
-    from graphify.detect import _is_ignored
 
     root = Path("/repo")
     patterns = [(root, "*.tmp")]  # non-empty so _eval runs
@@ -858,6 +860,7 @@ def test_save_manifest_skips_semantic_hash_for_files_without_cache(tmp_path):
     """Files in failed chunks have no semantic cache entry; save_manifest must
     leave their semantic_hash empty so detect_incremental re-queues them (#933)."""
     import json
+
     from graphify.cache import save_cached
 
     doc1 = tmp_path / "docs" / "a.md"
@@ -1301,7 +1304,8 @@ def test_shebang_interpreter_env_vs_assignment_before_interpreter(tmp_path):
 def test_save_manifest_relativizes_keys_when_root_given(tmp_path):
     """``save_manifest(root=...)`` writes forward-slash relative keys."""
     import json
-    from graphify.detect import save_manifest, load_manifest
+
+    from graphify.detect import load_manifest, save_manifest
 
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "foo.py").write_text("def x(): pass\n")
@@ -1331,6 +1335,7 @@ def test_save_manifest_without_root_keeps_absolute_keys(tmp_path):
     absolute-keyed manifest format. Required so skill-generated scripts that
     call ``save_manifest(detect['files'])`` keep working unchanged."""
     import json
+
     from graphify.detect import save_manifest
 
     f = tmp_path / "foo.py"
@@ -1348,6 +1353,7 @@ def test_load_manifest_absolutizes_relative_keys(tmp_path):
     """``load_manifest(root=...)`` re-anchors stored relative keys so the
     in-memory shape matches what :func:`detect` returns."""
     import json
+
     from graphify.detect import load_manifest
 
     manifest_path = tmp_path / "graphify-out" / "manifest.json"
@@ -1366,6 +1372,7 @@ def test_load_manifest_passes_through_legacy_absolute_keys(tmp_path):
     """Legacy absolute-keyed manifests still load correctly when ``root``
     is supplied — the absolutize step is a no-op for already-absolute keys."""
     import json
+
     from graphify.detect import load_manifest
 
     manifest_path = tmp_path / "graphify-out" / "manifest.json"
@@ -1382,6 +1389,7 @@ def test_save_manifest_out_of_root_keeps_absolute(tmp_path):
     absolute so they round-trip on the saving machine even when they can't
     be portably encoded."""
     import json
+
     from graphify.detect import save_manifest
 
     outside = tmp_path.parent / f"{tmp_path.name}-sibling.py"
@@ -1403,8 +1411,7 @@ def test_detect_incremental_portable_across_paths(tmp_path):
     different absolute prefix (the cross-machine case #777 is about).
     Simulates two checkouts of the same corpus by hard-linking files into a
     second tmp dir and comparing detection results."""
-    import json
-    from graphify.detect import save_manifest, detect_incremental
+    from graphify.detect import detect_incremental, save_manifest
 
     # First "machine": create corpus, save manifest with root.
     repo_a = tmp_path / "repo_a"
@@ -1444,7 +1451,8 @@ def test_save_manifest_in_root_symlink_roundtrips(tmp_path):
     ``alias.py`` key missed on reload and re-extracted on every incremental
     run."""
     import json
-    from graphify.detect import save_manifest, load_manifest
+
+    from graphify.detect import load_manifest, save_manifest
 
     (tmp_path / "sub").mkdir()
     target = tmp_path / "sub" / "target.py"

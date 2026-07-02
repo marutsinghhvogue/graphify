@@ -10,7 +10,6 @@ skill.md spec (line ~390):
         match/script/pipeline_step.py (file node) -> script_pipeline_step
         setup.py (top-level) -> setup
 """
-from pathlib import Path
 
 from graphify.extract import extract
 

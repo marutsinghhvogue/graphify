@@ -1,8 +1,7 @@
 """Tests for graphify/dedup.py entity deduplication pipeline."""
 from __future__ import annotations
-import pytest
-from graphify.dedup import deduplicate_entities, _entropy, _shingles
 
+from graphify.dedup import _entropy, _shingles, deduplicate_entities
 
 # ── entropy gate ─────────────────────────────────────────────────────────────
 
@@ -162,8 +161,9 @@ def test_dedup_does_not_merge_model_with_suffix(tmp_path):
 
 def test_dedup_still_merges_real_typos():
     """Genuine same-length single-char typos should still merge (#878 non-regression)."""
-    from graphify.dedup import _is_variant_pair, _short_label_blocked
     from rapidfuzz.distance import JaroWinkler
+
+    from graphify.dedup import _is_variant_pair, _short_label_blocked
     a, b = "graphextractor", "graphextractar"
     score = JaroWinkler.normalized_similarity(a, b) * 100
     assert not _is_variant_pair(a, b), "not a variant pair"
@@ -183,7 +183,6 @@ def test_prefix_extension_symbols_not_merged():
     """Distinct symbols whose name is a strict prefix-extension of another must not
     be merged (#1201). getActiveSession / getActiveSessions score ~98.82 JW but are
     different functions; parseConfig / parseConfigFile likewise."""
-    import networkx as nx
     from graphify.dedup import deduplicate_entities
 
     pairs = [

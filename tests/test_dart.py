@@ -1,10 +1,9 @@
-import unittest
 import tempfile
-import sys
 import textwrap
+import unittest
 from pathlib import Path
 
-from graphify.extract import extract_dart, _make_id, _file_stem
+from graphify.extract import _make_id, extract_dart
 
 
 class TestDart(unittest.TestCase):
@@ -470,13 +469,13 @@ class TestDart(unittest.TestCase):
         mixin AuthMixin on BaseWidget {}
         typedef JsonMap = Map<String, dynamic>;
         extension type UserId(int value) implements Object {}
-        
+
         class MyService {
           final AuthService api;
           MyService(this.api);
-          
+
           factory MyService.fromJson() {}
-          
+
           void navigate(BuildContext context) {
             context.go('/home');
             Navigator.pushNamed(context, Routes.login);
@@ -570,9 +569,9 @@ class TestDart(unittest.TestCase):
 
         child_code = textwrap.dedent("""
         part of 'parent_lib.dart';
-        
+
         class ChildClass extends Bloc<Pair<UserEvent, MyState>, State> {}
-        
+
         var User(name: myVar, age: myAge) = user;
 
         void runDI(BuildContext context) {

@@ -11,8 +11,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 # tests/ -> repo root is one parent up; put it on the path so tools.skillgen
 # imports regardless of pytest's import mode.
 REPO_ROOT = Path(__file__).resolve().parent.parent

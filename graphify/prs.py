@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
 from graphify.paths import default_graph_json as _default_graph_json
 
-
 # ── ANSI colours ─────────────────────────────────────────────────────────────
 
 _NO_COLOR = not sys.stdout.isatty() or os.environ.get("NO_COLOR")
@@ -101,7 +100,7 @@ _STATUS_ORDER = ["WRONG-BASE", "CI-FAIL", "CHANGES-REQ", "DRAFT", "STALE", "PEND
 _STALE_DAYS = 14
 
 
-def _classify(pr: "PRInfo", base: str = "v8") -> str:
+def _classify(pr: PRInfo, base: str = "v8") -> str:
     if pr.base_branch != base:
         return "WRONG-BASE"
     if pr.ci_status == "FAILURE":
@@ -246,7 +245,7 @@ def _path_match(graph_src: str, pr_file: str) -> bool:
     return graph_src.endswith("/" + pr_file) or pr_file.endswith("/" + graph_src)
 
 
-def compute_pr_impact(files: list[str], G: "nx.Graph") -> tuple[list[int], int]:
+def compute_pr_impact(files: list[str], G: nx.Graph) -> tuple[list[int], int]:
     """Return (communities_touched, nodes_affected) for a set of changed files.
 
     Builds a file→(communities, count) index first so lookup is O(nodes + files)
@@ -279,7 +278,7 @@ def compute_pr_impact(files: list[str], G: "nx.Graph") -> tuple[list[int], int]:
     return sorted(comms), nodes
 
 
-def format_prs_text(prs: list["PRInfo"], base: str) -> str:
+def format_prs_text(prs: list[PRInfo], base: str) -> str:
     """Plain-text PR summary for MCP output (no ANSI)."""
     actionable = [p for p in prs if p.base_branch == base]
     wrong = len(prs) - len(actionable)
@@ -558,7 +557,7 @@ _TRIAGE_MODEL_DEFAULTS: dict[str, str] = {
 
 def _resolve_triage_backend() -> tuple[str, str]:
     """Return (backend, model) using GRAPHIFY_TRIAGE_BACKEND or first available key."""
-    from graphify.llm import BACKENDS, _get_backend_api_key, _default_model_for_backend
+    from graphify.llm import BACKENDS, _default_model_for_backend, _get_backend_api_key
 
     explicit = os.environ.get("GRAPHIFY_TRIAGE_BACKEND", "").strip()
     if explicit in BACKENDS:
@@ -649,7 +648,9 @@ def triage_with_opus(prs: list[PRInfo], base: str) -> None:
             print("\n")
 
         elif backend == "claude-cli":
-            import platform as _platform, shutil as _shutil, subprocess as _sp
+            import platform as _platform
+            import shutil as _shutil
+            import subprocess as _sp
             _claude = "claude"
             if _platform.system() == "Windows":
                 _claude = _shutil.which("claude.cmd") or _shutil.which("claude") or "claude"

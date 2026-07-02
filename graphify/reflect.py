@@ -281,7 +281,7 @@ def _decay(date_str: str, now: datetime, half_life_days: float) -> float:
 
 def _empty_bucket() -> dict[str, Any]:
     return {
-        "counts": {k: 0 for k in (*OUTCOMES, "unmarked")},
+        "counts": dict.fromkeys((*OUTCOMES, "unmarked"), 0),
         # node -> running signed, time-decayed score
         "node_score": {},
         # node -> distinct positive / negative result counts (for corroboration)

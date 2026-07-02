@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import unicodedata
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-import unicodedata
 
 import networkx as nx
-
 
 DEFAULT_AFFECTED_RELATIONS = (
     "calls",
@@ -164,6 +163,7 @@ def format_affected(
 
 def load_graph(path: Path) -> nx.Graph:
     import json
+
     from networkx.readwrite import json_graph
 
     raw = json.loads(path.read_text(encoding="utf-8"))

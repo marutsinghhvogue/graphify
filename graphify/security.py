@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import html
 import http.client
+import ipaddress
 import os
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-
-import ipaddress
-import socket
 
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME
 
@@ -345,7 +344,7 @@ def validate_graph_path(path: str | Path, base: Path | None = None) -> Path:
         raise ValueError(
             f"Path {path!r} escapes the allowed directory {base}. "
             "Only paths inside graphify-out/ are permitted."
-        )
+        ) from None
 
     if not resolved.exists():
         raise FileNotFoundError(f"Graph file not found: {resolved}")

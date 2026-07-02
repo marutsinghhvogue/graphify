@@ -21,17 +21,19 @@
 #    before any graph construction happens.
 #
 from __future__ import annotations
+
 import json
 import os
 import re
 import sys
 import unicodedata
 from pathlib import Path
+
 import networkx as nx
+
 from .ids import normalize_id as _normalize_id
 from .paths import default_graph_json as _default_graph_json
 from .validate import validate_extraction
-
 
 # Synonym mapper for known invalid file_type values that LLM subagents commonly
 # emit. Keeps semantic intent close (markdown→document, tool→code) and falls
@@ -274,12 +276,22 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
     for ghost_id, canonical_id in _ghost_remap.items():
         norm_to_id[_normalize_id(ghost_id)] = canonical_id
         norm_to_id[ghost_id] = canonical_id
+
+    # Human-supplied entity aliases (.graphify_aliases.json at repo root). `merge`
+    # entries remove a node and route its ID onto the canonical node here, reusing
+    # the same norm_to_id repointing as the ghost-merge above. `same_as` entries
+    # come back as synthetic edge dicts that flow through the edge loop below, so
+    # they inherit direction/source_file/dedup handling like any other edge (#alias).
+    from .aliases import apply_aliases, load_aliases
+
+    _alias_edges = apply_aliases(G, node_set, norm_to_id, load_aliases(_root))
+
     # Iterate edges in a deterministic order. The graph is undirected and stores
     # direction in _src/_tgt; when two edges collapse onto the same node pair the
     # last write wins, so an unstable iteration order flips _src/_tgt run-to-run
     # and makes the serialized graph churn. Sorting fixes the last-write outcome.
     for edge in sorted(
-        extraction.get("edges", []),
+        list(extraction.get("edges", [])) + _alias_edges,
         key=lambda e: (
             str(e.get("source", e.get("from", ""))),
             str(e.get("target", e.get("to", ""))),

@@ -1,10 +1,12 @@
 """Tests for hooks.py - git hook install/uninstall."""
 import os
 import subprocess
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
-from graphify.hooks import install, uninstall, status, _hooks_dir, _HOOK_MARKER, _CHECKOUT_MARKER
+
+from graphify.hooks import _CHECKOUT_MARKER, _HOOK_MARKER, _hooks_dir, install, status, uninstall
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
@@ -172,7 +174,8 @@ def test_install_embeds_pinned_interpreter(tmp_path):
     fallbacks cannot import graphify (wrong venv), and the hook silently exits 0.
     Pinning sys.executable at install time makes the hook work regardless of PATH.
     """
-    import re, sys
+    import re
+    import sys
     repo = _make_git_repo(tmp_path)
     install(repo)
     commit_hook = (repo / ".git" / "hooks" / "post-commit").read_text()
@@ -224,10 +227,10 @@ import ast  # noqa: E402
 import re  # noqa: E402
 
 from graphify.hooks import (  # noqa: E402
-    _HOOK_SCRIPT,
     _CHECKOUT_SCRIPT,
-    _REBUILD_BODY_COMMIT,
+    _HOOK_SCRIPT,
     _REBUILD_BODY_CHECKOUT,
+    _REBUILD_BODY_COMMIT,
     _detached_launch,
 )
 

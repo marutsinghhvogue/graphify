@@ -1,16 +1,15 @@
 """Tests for hyperedge support in graphify."""
 from __future__ import annotations
+
 import json
 import tempfile
 from pathlib import Path
 
 import networkx as nx
-import pytest
 
 from graphify.build import build_from_json
 from graphify.export import attach_hyperedges, to_json
 from graphify.report import generate
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

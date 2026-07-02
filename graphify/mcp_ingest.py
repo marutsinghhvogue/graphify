@@ -59,13 +59,11 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from pathlib import Path
 from typing import Any
 
 from graphify.ids import make_id as _shared_make_id
 from graphify.security import sanitize_label
-
 
 MCP_CONFIG_FILENAMES: frozenset[str] = frozenset({
     ".mcp.json",

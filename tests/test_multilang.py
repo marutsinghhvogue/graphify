@@ -1,9 +1,11 @@
 """Tests for multi-language AST extraction: JS/TS, Go, Rust, SQL."""
 from __future__ import annotations
-import shutil
+
 from pathlib import Path
+
 import pytest
-from graphify.extract import extract_js, extract_go, extract_rust, extract, extract_sql
+
+from graphify.extract import extract, extract_go, extract_js, extract_rust, extract_sql
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -174,6 +176,7 @@ def test_go_method_declaration_emits_refs_only_when_name_present():
     """
     import ast
     import inspect
+
     from graphify.extract import extract_go
 
     tree = ast.parse(inspect.getsource(extract_go))

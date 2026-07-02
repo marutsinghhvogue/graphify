@@ -9,23 +9,23 @@ which silently increased per-question token usage in Claude Code sessions
 or partial change is caught by CI.
 """
 from __future__ import annotations
+
 import json
 
 from graphify.__main__ import (
-    _SETTINGS_HOOK,
-    _READ_SETTINGS_HOOK,
-    _CLAUDE_MD_SECTION,
     _AGENTS_MD_SECTION,
-    _GEMINI_MD_SECTION,
-    _GEMINI_HOOK,
-    _VSCODE_INSTRUCTIONS_SECTION,
     _ANTIGRAVITY_RULES,
-    _KIRO_STEERING,
+    _CLAUDE_MD_SECTION,
     _CURSOR_RULE,
-    _OPENCODE_PLUGIN_JS,
     _DEVIN_RULES,
+    _GEMINI_HOOK,
+    _GEMINI_MD_SECTION,
+    _KIRO_STEERING,
+    _OPENCODE_PLUGIN_JS,
+    _READ_SETTINGS_HOOK,
+    _SETTINGS_HOOK,
+    _VSCODE_INSTRUCTIONS_SECTION,
 )
-
 
 # All install-surface text rendered as plain strings, in one place.
 # Hook constants are dicts/JSON; serialize them so we can do substring checks

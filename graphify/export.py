@@ -1,5 +1,6 @@
 # write graph to HTML, JSON, SVG, GraphML, Obsidian vault, and Neo4j Cypher
 from __future__ import annotations
+
 import hashlib
 import html as _html
 import json
@@ -10,12 +11,13 @@ import shutil
 from collections import Counter
 from datetime import date
 from pathlib import Path
+
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.security import sanitize_label
+
 from graphify.analyze import _node_community_map
 from graphify.build import edge_data
-
+from graphify.security import sanitize_label
 
 # Artifacts worth preserving across rebuilds (non-regenerable without LLM or curation).
 _BACKUP_ARTIFACTS = [
@@ -29,7 +31,7 @@ _BACKUP_ARTIFACTS = [
 ]
 
 
-def backup_if_protected(out_dir: Path) -> "Path | None":
+def backup_if_protected(out_dir: Path) -> Path | None:
     """Snapshot graph artifacts to a dated subfolder before an overwrite.
 
     Triggers when graph.json exists AND either:
@@ -653,6 +655,7 @@ def to_html(
         if node_limit is not None:
             # Build aggregated community meta-graph
             from collections import Counter as _Counter
+
             import networkx as _nx
             print(f"Graph has {G.number_of_nodes()} nodes (above {limit} limit). Building aggregated community view...")
             node_to_community = {nid: cid for cid, members in communities.items() for nid in members}
@@ -1484,8 +1487,8 @@ def to_svg(
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
     except ImportError as e:
         raise ImportError("matplotlib not installed. Run: pip install matplotlib") from e
 

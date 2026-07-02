@@ -24,7 +24,6 @@ import pytest
 import graphify
 import graphify.__main__ as mainmod
 
-
 PKG_DIR = Path(graphify.__file__).parent
 
 
@@ -403,7 +402,7 @@ def _build_wheel_names(repo_root):
         raise AssertionError(
             "the 'build' module is required for the wheel-content test but is not "
             "installed; it is a declared dev dependency (run `uv sync --all-extras`)"
-        )
+        ) from None
 
     with tempfile.TemporaryDirectory() as outdir:
         result = subprocess.run(

@@ -26,7 +26,6 @@ import pytest
 import graphify
 import graphify.__main__ as mainmod
 
-
 PKG_DIR = Path(graphify.__file__).parent
 
 # Every platform in the config plus the scope each is exercised at. The

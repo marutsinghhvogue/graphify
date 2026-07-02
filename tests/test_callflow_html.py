@@ -174,6 +174,7 @@ def test_load_graph_rejects_oversized_file(monkeypatch, tmp_path):
     """#F4: callflow_html.load_graph must refuse to read a graph.json that
     exceeds the size cap (SystemExit via translated ValueError)."""
     import pytest
+
     from graphify.callflow_html import load_graph
 
     graph_path = tmp_path / "graph.json"

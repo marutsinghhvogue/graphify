@@ -464,7 +464,7 @@ def _wrap_untrusted(rel: str, content: str) -> str:
     )
 
 
-def _read_files(units: "list[Path | FileSlice]", root: Path) -> str:
+def _read_files(units: list[Path | FileSlice], root: Path) -> str:
     """Return file/slice contents formatted for the extraction prompt.
 
     Each unit is wrapped in an <untrusted_source> delimiter block and known
@@ -560,8 +560,8 @@ def _is_vision_image(path: Path) -> bool:
 
 
 def _partition_semantic_files(
-    units: "list[Path | FileSlice]",
-) -> tuple["list[Path | FileSlice]", list[Path]]:
+    units: list[Path | FileSlice],
+) -> tuple[list[Path | FileSlice], list[Path]]:
     """Split a chunk into (text-like units, raster-image files).
 
     A ``FileSlice`` is always text (only splittable text is sliced), so it never
@@ -1403,7 +1403,7 @@ def extract_files_direct(
     )
 
 
-def _estimate_file_tokens(unit: "Path | FileSlice") -> int:
+def _estimate_file_tokens(unit: Path | FileSlice) -> int:
     """Estimate the prompt-token cost of a file or slice under `_read_files` rules.
 
     Uses tiktoken (`cl100k_base`) when available for accurate counts. Falls back
@@ -1443,9 +1443,9 @@ def _estimate_file_tokens(unit: "Path | FileSlice") -> int:
 
 
 def _pack_chunks_by_tokens(
-    files: "list[Path | FileSlice]",
+    files: list[Path | FileSlice],
     token_budget: int,
-) -> "list[list[Path | FileSlice]]":
+) -> list[list[Path | FileSlice]]:
     """Greedily pack files/slices into chunks that fit a token budget.
 
     Units are first grouped by parent directory so related artifacts share a
@@ -1459,12 +1459,12 @@ def _pack_chunks_by_tokens(
     if token_budget <= 0:
         raise ValueError(f"token_budget must be positive, got {token_budget}")
 
-    by_dir: dict[Path, "list[Path | FileSlice]"] = {}
+    by_dir: dict[Path, list[Path | FileSlice]] = {}
     for f in files:
         by_dir.setdefault(unit_path(f).parent, []).append(f)
 
-    chunks: "list[list[Path | FileSlice]]" = []
-    current: "list[Path | FileSlice]" = []
+    chunks: list[list[Path | FileSlice]] = []
+    current: list[Path | FileSlice] = []
     current_tokens = 0
     current_images = 0
 
@@ -1578,7 +1578,7 @@ def _extract_with_adaptive_retry(
             "finish_reason": "stop",
         }
 
-    def _split_lone_slice() -> "tuple[FileSlice, FileSlice] | None":
+    def _split_lone_slice() -> tuple[FileSlice, FileSlice] | None:
         # When a single-unit chunk is a slice, bisect the slice so we can retry
         # on a smaller range rather than give up (#1369).
         if len(chunk) == 1 and isinstance(chunk[0], FileSlice) and _depth < max_depth:
@@ -1882,7 +1882,9 @@ def _call_llm(
         return resp.content[0].text if resp.content else ""
 
     if backend == "claude-cli":
-        import platform, shutil, subprocess
+        import platform
+        import shutil
+        import subprocess
         # Mirror the extraction-path resolution: on Windows the npm shim is
         # claude.cmd, which CreateProcess can't resolve from a bare "claude"
         # (PATHEXT doesn't apply), so pass the resolved .cmd path explicitly.

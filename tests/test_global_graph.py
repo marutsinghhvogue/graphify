@@ -4,10 +4,10 @@ graphify/dedup.py."""
 from __future__ import annotations
 
 import json
-import pytest
-import networkx as nx
 from unittest.mock import patch
 
+import networkx as nx
+import pytest
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,7 +140,7 @@ def test_global_add_two_repos_no_collision(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_graph_path), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_manifest_path):
-        from graphify.global_graph import global_add, _load_global_graph
+        from graphify.global_graph import _load_global_graph, global_add
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()
@@ -239,8 +239,9 @@ def test_dedup_ok_with_no_repo_attr():
 
 def test_merge_graphs_prefixes_ids(tmp_path):
     """merge-graphs should prefix node IDs with repo name to avoid silent collision."""
-    from graphify.build import prefix_graph_for_global
     from networkx.readwrite import json_graph as jg
+
+    from graphify.build import prefix_graph_for_global
 
     # Two graphs with same node ID
     G1 = _make_graph([{"id": "userservice", "label": "UserService", "source_file": "src/user.py"}])
@@ -305,7 +306,7 @@ def test_global_add_rewires_edges_to_deduplicated_externals(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add, _load_global_graph
+        from graphify.global_graph import _load_global_graph, global_add
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()

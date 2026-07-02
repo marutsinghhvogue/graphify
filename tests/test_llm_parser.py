@@ -11,10 +11,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import pytest
-
 from graphify import llm
-
 
 # ---------- _parse_llm_json: the four canonical failure modes ----------
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from graphify.llm import detect_backend, BACKENDS, _validate_ollama_base_url
+from graphify.llm import BACKENDS, _validate_ollama_base_url, detect_backend
 
 
 @pytest.mark.parametrize("url", [
@@ -90,9 +90,9 @@ def test_detect_backend_none_without_envvars(monkeypatch):
 def test_ollama_api_key_sentinel(monkeypatch):
     """extract_files_direct with backend=ollama and no OLLAMA_API_KEY should use sentinel 'ollama' not raise."""
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
-    from unittest.mock import patch
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
 
     fake_result = {
         "nodes": [],

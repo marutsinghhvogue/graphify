@@ -1,8 +1,18 @@
 import json
 from pathlib import Path
+
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.build import build_from_json, build, build_merge, edge_data, edge_datas, dedupe_edges, dedupe_nodes
+
+from graphify.build import (
+    build,
+    build_from_json,
+    build_merge,
+    dedupe_edges,
+    dedupe_nodes,
+    edge_data,
+    edge_datas,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -268,8 +278,8 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     build_merge must read the saved JSON's source/target verbatim instead
     of round-tripping through NetworkX.
     """
-    from graphify.extract import extract_js
     from graphify.export import to_json
+    from graphify.extract import extract_js
 
     # Callee `b` is defined before caller `a` so node insertion order
     # is b, a. An undirected Graph then yields the edge as (b, a) on

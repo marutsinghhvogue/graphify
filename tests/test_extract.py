@@ -2,7 +2,16 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
-from graphify.extract import extract_python, extract, collect_files, _make_id, extract_bash, extract_json, _DISPATCH
+
+from graphify.extract import (
+    _DISPATCH,
+    _make_id,
+    collect_files,
+    extract,
+    extract_bash,
+    extract_json,
+    extract_python,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -465,7 +474,8 @@ def test_extract_generic_surfaces_tree_sitter_version_mismatch_hint(monkeypatch)
     """
     import sys
     import types
-    from graphify.extract import _extract_generic, LanguageConfig
+
+    from graphify.extract import LanguageConfig, _extract_generic
 
     # Build a fake tree_sitter module whose Language() raises TypeError -
     # this is exactly what users see when an older tree-sitter is paired
@@ -506,7 +516,7 @@ def test_extract_js_destructured_require_imports_from():
 
 def test_extract_js_destructured_require_named_symbols():
     """Destructured CJS requires must emit symbol-level `imports` edges per binder."""
-    from graphify.extract import extract_js, _make_id, _file_stem
+    from graphify.extract import _file_stem, _make_id, extract_js
     result = extract_js(FIXTURES / "cjs_require.js")
     sym_targets = [e["target"] for e in result["edges"] if e["relation"] == "imports"]
     foundation_stem = _file_stem(FIXTURES / "foundation.js")
@@ -516,7 +526,7 @@ def test_extract_js_destructured_require_named_symbols():
 
 def test_extract_js_member_require_emits_property_symbol():
     """`const x = require('./m').y` must emit symbol edge for `y`."""
-    from graphify.extract import extract_js, _make_id, _file_stem
+    from graphify.extract import _file_stem, _make_id, extract_js
     result = extract_js(FIXTURES / "cjs_require.js")
     sym_targets = [e["target"] for e in result["edges"] if e["relation"] == "imports"]
     helpers_stem = _file_stem(FIXTURES / "helpers.js")
@@ -843,7 +853,7 @@ def test_extract_tsx_jsx_expression_calls_resolve():
 
 def test_extract_tsx_uses_tsx_grammar():
     """Wiring check: the .tsx config must use tree-sitter's `language_tsx`."""
-    from graphify.extract import _TSX_CONFIG, _TS_CONFIG
+    from graphify.extract import _TS_CONFIG, _TSX_CONFIG
     assert _TSX_CONFIG.ts_language_fn == "language_tsx"
     assert _TS_CONFIG.ts_language_fn == "language_typescript"
 
@@ -884,8 +894,9 @@ def test_extract_falls_back_to_sequential_when_parallel_returns_false(tmp_path, 
 
 def test_extract_parallel_returns_false_on_broken_pool(tmp_path, monkeypatch, capsys):
     """_extract_parallel must catch BrokenProcessPool internally and return False."""
-    from concurrent.futures.process import BrokenProcessPool
     import concurrent.futures
+    from concurrent.futures.process import BrokenProcessPool
+
     from graphify import extract as extract_mod
 
     class FakePool:
@@ -954,7 +965,7 @@ def test_extract_bash_emits_source_imports_from(tmp_path):
     helpers = tmp_path / "helpers.sh"
     helpers.write_text("# helper\n")
     script = tmp_path / "deploy.sh"
-    script.write_text(f"#!/bin/bash\nsource ./helpers.sh\nfoo() {{ echo hi; }}\n")
+    script.write_text("#!/bin/bash\nsource ./helpers.sh\nfoo() { echo hi; }\n")
     result = extract_bash(script)
     import_edges = [e for e in result["edges"] if e["relation"] == "imports_from"]
     assert len(import_edges) >= 1
@@ -987,8 +998,8 @@ def test_extract_bash_skip_builtins_in_calls():
 
 def test_extract_bash_missing_grammar_returns_error():
     """extract_bash returns error dict when tree-sitter-bash not installed (mocked)."""
-    import unittest.mock as mock
     import builtins
+    import unittest.mock as mock
     real_import = builtins.__import__
 
     def patched(name, *args, **kwargs):
@@ -1387,8 +1398,9 @@ def test_semantic_reference_edges_carry_context_and_source():
 
 def test_pure_export_no_from_not_treated_as_reexport():
     """export { localVar } without 'from' should NOT create re_exports edges."""
-    from graphify.extract import extract_js
     import tempfile
+
+    from graphify.extract import extract_js
     code = b"const x = 1;\nexport { x };\n"
     with tempfile.NamedTemporaryFile(suffix=".ts", delete=False) as f:
         f.write(code)
@@ -1400,7 +1412,7 @@ def test_pure_export_no_from_not_treated_as_reexport():
 
 def test_dart_child_node_ids_are_stem_based(tmp_path):
     """Dart child node IDs must be built from _file_stem rather than absolute path."""
-    from graphify.extract import extract_dart, _file_stem, _make_id
+    from graphify.extract import _file_stem, _make_id, extract_dart
 
     src_file = tmp_path / "mydir" / "sample.dart"
     src_file.parent.mkdir(parents=True, exist_ok=True)

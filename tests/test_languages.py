@@ -1,15 +1,36 @@
 """Tests for language extractors: Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Go, Julia, Fortran, JS/TS, .NET project files."""
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
+
 from graphify.extract import (
-    extract_java, extract_c, extract_cpp, extract_ruby,
-    extract_csharp, extract_kotlin, extract_scala, extract_php,
-    extract_swift, extract_go, extract_julia, extract_js, extract_fortran,
-    extract_groovy, extract_sln, extract_csproj, extract_razor,
-    extract_dm, extract_dmi, extract_dmm, extract_dmf,
-    extract_powershell, extract_apex, extract_verilog,
+    extract_apex,
+    extract_c,
+    extract_cpp,
+    extract_csharp,
+    extract_csproj,
+    extract_dm,
+    extract_dmf,
+    extract_dmi,
+    extract_dmm,
+    extract_fortran,
+    extract_go,
+    extract_groovy,
+    extract_java,
+    extract_js,
+    extract_julia,
+    extract_kotlin,
+    extract_php,
+    extract_powershell,
     extract_powershell_manifest,
+    extract_razor,
+    extract_ruby,
+    extract_scala,
+    extract_sln,
+    extract_swift,
+    extract_verilog,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -18,6 +39,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # is not installed by a default `uv sync`. Skip the .dm/.dme grammar tests when the
 # grammar is absent (.dmi/.dmm/.dmf use no tree-sitter and are always tested).
 import importlib.util as _ilu
+
 _needs_dm = pytest.mark.skipif(
     _ilu.find_spec("tree_sitter_dm") is None,
     reason="tree-sitter-dm not installed (optional [dm] extra)",
@@ -761,6 +783,7 @@ def test_swift_extension_across_files_merges_into_canonical_type():
 
 from graphify.extract import extract_elixir
 
+
 def test_elixir_finds_module():
     r = extract_elixir(FIXTURES / "sample.ex")
     assert "error" not in r
@@ -1022,7 +1045,7 @@ def test_fortran_finds_calls():
 def test_fortran_case_insensitive_names():
     r = extract_fortran(FIXTURES / "sample.f90")
     labels = [n["label"] for n in r["nodes"]]
-    assert all(l == l.lower() or "(" in l for l in labels if l.endswith(("()", "")) and not "." in l)
+    assert all(l == l.lower() or "(" in l for l in labels if l.endswith(("()", "")) and "." not in l)
     assert "geometry" in labels
     assert "main" in labels
 
@@ -1159,8 +1182,10 @@ def test_powershell_dot_source_inside_function_emits_edge():
 
 def test_powershell_psd1_dispatched():
     """_get_extractor should route .psd1 to extract_powershell_manifest."""
+    import os
+    import tempfile
+
     from graphify.extract import _get_extractor
-    import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".psd1", delete=False) as f:
         f.write(b"@{ RootModule = 'X.psm1' }")
         path = f.name
@@ -1372,6 +1397,7 @@ def test_ts_local_const_does_not_emit_phantom_node(tmp_path):
 
 from graphify.extract import extract_markdown
 
+
 def test_markdown_no_error():
     r = extract_markdown(FIXTURES / "deploy_guide.md")
     assert "error" not in r
@@ -1419,7 +1445,8 @@ def test_markdown_fenced_heading_not_parsed():
     The fence-toggle skips over fenced contents so interior markdown syntax
     is not misread as document structure.
     """
-    import tempfile, os
+    import os
+    import tempfile
     src = (
         "# Real Heading\n"
         "\n"

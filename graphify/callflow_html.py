@@ -19,19 +19,18 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import argparse
+import hashlib
+import json
 import os
 import re
 import sys
-import hashlib
-from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from html import escape
+from pathlib import Path
 
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME
-
 
 # ──────────────────────────────────────────────
 # 1. CSS template (fixed, project-agnostic)

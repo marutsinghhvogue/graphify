@@ -1,8 +1,8 @@
 """Tests for .NET project file extraction (.sln, .csproj, .razor)."""
-from pathlib import Path
 import tempfile
-import pytest
-from graphify.extract import extract_sln, extract_slnx, extract_csproj, extract_razor
+from pathlib import Path
+
+from graphify.extract import extract_csproj, extract_razor, extract_sln, extract_slnx
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

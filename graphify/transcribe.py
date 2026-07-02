@@ -7,7 +7,6 @@ from pathlib import Path
 
 from graphify.paths import out_path as _out_path
 
-
 VIDEO_EXTENSIONS = {'.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v', '.mp3', '.wav', '.m4a', '.ogg'}
 URL_PREFIXES = ('http://', 'https://', 'www.')
 

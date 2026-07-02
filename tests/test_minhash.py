@@ -1,7 +1,9 @@
 """Tests for graphify/_minhash.py — MinHash sketch and band-LSH."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
+
 from graphify._minhash import MinHash, MinHashLSH, _optimal_lsh_params
 
 

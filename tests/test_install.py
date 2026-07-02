@@ -1,10 +1,10 @@
 """Tests for graphify install --platform routing."""
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from unittest.mock import patch
-import pytest
 
+import pytest
 
 PLATFORMS = {
     "claude": (".claude/skills/graphify/SKILL.md",),
@@ -281,6 +281,7 @@ def test_kilo_skill_mentions_task_tool():
 def test_kilo_skill_avoids_double_quoted_python_c_fstring_dict_keys():
     """Kilo runs snippets through double-quoted python -c strings."""
     import re
+
     import graphify
 
     skill = (Path(graphify.__file__).parent / "skill-kilo.md").read_text()
@@ -352,6 +353,7 @@ def test_codebuddy_install_writes_codebuddy_md(tmp_path):
 
 def test_codebuddy_install_writes_hook(tmp_path):
     import json as _json
+
     from graphify.__main__ import codebuddy_install
     codebuddy_install(tmp_path)
     settings = _json.loads((tmp_path / ".codebuddy" / "settings.json").read_text())
@@ -386,6 +388,7 @@ def test_codebuddy_uninstall_removes_section(tmp_path):
 
 def test_codebuddy_uninstall_removes_hook(tmp_path):
     import json as _json
+
     from graphify.__main__ import codebuddy_install, codebuddy_uninstall
     codebuddy_install(tmp_path)
     codebuddy_uninstall(tmp_path)
@@ -838,6 +841,7 @@ def test_gemini_install_writes_gemini_md(tmp_path):
 
 def test_gemini_install_writes_hook(tmp_path):
     import json as _json
+
     from graphify.__main__ import gemini_install
 
     gemini_install(tmp_path)
@@ -876,6 +880,7 @@ def test_gemini_uninstall_removes_section(tmp_path):
 
 def test_gemini_uninstall_removes_hook(tmp_path):
     import json as _json
+
     from graphify.__main__ import gemini_install, gemini_uninstall
 
     gemini_install(tmp_path)

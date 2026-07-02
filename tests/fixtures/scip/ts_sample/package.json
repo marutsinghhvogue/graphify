@@ -1,0 +1,6 @@
+{
+  "name": "scip-ts-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny fixture project for generating a real index.scip via scip-typescript."
+}

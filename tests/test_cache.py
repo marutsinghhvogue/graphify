@@ -1,7 +1,16 @@
 """Tests for graphify/cache.py."""
+
 import pytest
-from pathlib import Path
-from graphify.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
+
+from graphify.cache import (
+    _body_content,
+    cache_dir,
+    cached_files,
+    clear_cache,
+    file_hash,
+    load_cached,
+    save_cached,
+)
 
 
 @pytest.fixture
@@ -198,7 +207,8 @@ def test_save_cached_relativizes_source_file(tmp_path):
     """The on-disk cache JSON contains forward-slash relative source_file
     entries — no absolute prefix from the saving machine leaks in."""
     import json
-    from graphify.cache import save_cached, file_hash, cache_dir
+
+    from graphify.cache import cache_dir, file_hash, save_cached
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
@@ -225,7 +235,7 @@ def test_load_cached_absolutizes_source_file(tmp_path):
     """``load_cached`` returns the same absolute-path shape that a fresh
     extraction produces, so consumers don't need to special-case cache
     hits vs. fresh extraction."""
-    from graphify.cache import save_cached, load_cached
+    from graphify.cache import load_cached, save_cached
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
@@ -247,7 +257,8 @@ def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
     inside) must still load correctly: the absolutize step is a no-op for
     already-absolute values."""
     import json
-    from graphify.cache import load_cached, file_hash, cache_dir
+
+    from graphify.cache import cache_dir, file_hash, load_cached
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
@@ -271,9 +282,9 @@ def test_cache_portable_across_roots(tmp_path):
     """End-to-end portability: a cache entry written at one root can be
     consumed at a different absolute root because the file is content-hashed
     AND its embedded source_file is stored relative."""
-    import json
     import shutil
-    from graphify.cache import save_cached, load_cached, file_hash, cache_dir
+
+    from graphify.cache import load_cached, save_cached
 
     repo_a = tmp_path / "repo_a"
     repo_a.mkdir()
@@ -296,7 +307,7 @@ def test_cache_portable_across_roots(tmp_path):
     )
     # Source path re-anchored to the new root, not the old one.
     assert loaded["nodes"][0]["source_file"] == str(src_b.resolve())
-    assert not str(repo_a) in loaded["nodes"][0]["source_file"]
+    assert str(repo_a) not in loaded["nodes"][0]["source_file"]
 
 
 # --- AST cache versioning ----------------------------------------------------
@@ -351,7 +362,8 @@ def test_legacy_unversioned_ast_entries_not_served(tmp_path):
     cache/ast/) are by definition from an older extractor and must not be
     served — that staleness is exactly what version namespacing fixes."""
     import json
-    from graphify.cache import file_hash, _GRAPHIFY_OUT
+
+    from graphify.cache import _GRAPHIFY_OUT, file_hash
 
     f = tmp_path / "mod.py"
     f.write_text("def f(): pass\n")
@@ -395,7 +407,8 @@ def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path):
     manifest case (cache lookup is content-hashed, not key-matched), but
     keeps the on-disk shape consistent with what callers passed in."""
     import json
-    from graphify.cache import save_cached, file_hash, cache_dir
+
+    from graphify.cache import cache_dir, file_hash, save_cached
 
     (tmp_path / "sub").mkdir()
     target = tmp_path / "sub" / "target.py"

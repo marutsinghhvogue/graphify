@@ -1,11 +1,8 @@
 """Tests for graphify codebuddy install / uninstall commands."""
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from unittest.mock import patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -123,7 +120,7 @@ def test_codebuddy_install_idempotent(tmp_path):
 
 def test_codebuddy_install_upgrades_stale_section(tmp_path):
     """Re-install replaces an old graphify section with the current template."""
-    from graphify.__main__ import codebuddy_install, _CODEBUDDY_MD_MARKER
+    from graphify.__main__ import _CODEBUDDY_MD_MARKER, codebuddy_install
     # Write a stale section manually
     md = _codebuddy_md_path(tmp_path)
     md.write_text("old content\n\n## graphify\nThis is old instructions\n")

@@ -3,11 +3,9 @@ import json
 import tempfile
 from pathlib import Path
 
-import networkx as nx
-
+from graphify.analyze import god_nodes, surprising_connections
 from graphify.build import build_from_json
 from graphify.cluster import cluster, score_all
-from graphify.analyze import god_nodes, surprising_connections
 from graphify.export import to_json
 from graphify.report import generate
 
@@ -148,7 +146,7 @@ def test_report_shows_avg_confidence_for_inferred():
     report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, ".")
     assert "avg confidence" in report, "Report should show avg confidence for INFERRED edges"
     # The fixture has one INFERRED edge with score 0.75, so avg should be 0.75
-    assert "0.75" in report, f"Expected avg confidence 0.75 in report"
+    assert "0.75" in report, "Expected avg confidence 0.75 in report"
 
 
 def test_report_inferred_tag_with_score():

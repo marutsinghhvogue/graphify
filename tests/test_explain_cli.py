@@ -1,6 +1,8 @@
 """Regression tests for `graphify explain` arrow direction (#853)."""
 from __future__ import annotations
+
 import json
+
 import graphify.__main__ as mainmod
 
 

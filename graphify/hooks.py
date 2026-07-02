@@ -1,5 +1,6 @@
 # git hook integration - install/uninstall graphify post-commit and post-checkout hooks
 from __future__ import annotations
+
 import configparser
 import re
 import sys

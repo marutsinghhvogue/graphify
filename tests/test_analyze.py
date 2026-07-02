@@ -1,11 +1,22 @@
 """Tests for analyze.py."""
 import json
+from pathlib import Path
+
 import networkx as nx
 import pytest
-from pathlib import Path
+
+from graphify.analyze import (
+    _file_category,
+    _is_concept_node,
+    _is_json_key_node,
+    _surprise_score,
+    find_import_cycles,
+    god_nodes,
+    graph_diff,
+    surprising_connections,
+)
 from graphify.build import build_from_json
 from graphify.cluster import cluster
-from graphify.analyze import god_nodes, surprising_connections, _is_concept_node, graph_diff, _surprise_score, _file_category, _is_json_key_node, find_import_cycles
 from graphify.extract import _make_id
 
 FIXTURES = Path(__file__).parent / "fixtures"

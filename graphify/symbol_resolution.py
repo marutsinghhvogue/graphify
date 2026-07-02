@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import ast
-import re
-import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any
 
 from graphify.ids import make_id as _shared_make_id
 from graphify.security import sanitize_metadata
-
 
 
 @dataclass(frozen=True)

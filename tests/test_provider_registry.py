@@ -1,6 +1,4 @@
 import json
-import pytest
-from pathlib import Path
 
 
 def test_custom_provider_add_list_show_remove(tmp_path, monkeypatch):
@@ -38,9 +36,9 @@ def test_custom_provider_pricing_defaults_to_zero(tmp_path):
         }
     }), encoding="utf-8")
 
-    from graphify import llm
-    import importlib
     from unittest.mock import patch
+
+    from graphify import llm
 
     with patch.object(llm, "_custom_providers_path", side_effect=lambda global_=True: providers_file if global_ else tmp_path / "local.json"):
         loaded = llm._load_custom_providers()
@@ -60,8 +58,9 @@ def test_custom_provider_cannot_shadow_builtin(tmp_path):
         }
     }), encoding="utf-8")
 
-    from graphify import llm
     from unittest.mock import patch
+
+    from graphify import llm
 
     with patch.object(llm, "_custom_providers_path", side_effect=lambda global_=True: providers_file if global_ else tmp_path / "local.json"):
         loaded = llm._load_custom_providers()

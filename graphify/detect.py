@@ -1,10 +1,12 @@
 # file discovery, type classification, and corpus health checks
 from __future__ import annotations
+
 import fnmatch
 import json
 import os
 import re
 import shlex
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
@@ -420,21 +422,145 @@ def classify_file(path: Path) -> FileType | None:
     return None
 
 
-def extract_pdf_text(path: Path) -> str:
-    """Extract plain text from a PDF file using pypdf."""
-    if not _file_within_size_cap(path):
+# Below this many non-whitespace characters, a PDF's text layer is treated as
+# effectively empty and the OCR fallback (for scanned / image-only PDFs) kicks in.
+_PDF_EMPTY_TEXT_THRESHOLD = 8
+
+
+def _nonspace_len(text: str) -> int:
+    return sum(1 for ch in text if not ch.isspace())
+
+
+def _render_table_markdown(rows: list) -> str:
+    """Render a pdfplumber table (rows of cells) as a Markdown table.
+
+    Cells may be ``None`` (empty) or contain newlines; ragged rows are padded
+    to the widest row so the Markdown stays well-formed.
+    """
+    cleaned: list[list[str]] = []
+    width = 0
+    for row in rows:
+        cells = [(c or "").replace("\n", " ").strip() for c in row]
+        cleaned.append(cells)
+        width = max(width, len(cells))
+    if width == 0 or not cleaned:
         return ""
+    for cells in cleaned:
+        cells.extend([""] * (width - len(cells)))
+    lines = ["| " + " | ".join(cleaned[0]) + " |",
+             "| " + " | ".join(["---"] * width) + " |"]
+    for cells in cleaned[1:]:
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _pdf_text_pdfplumber(path: Path) -> str | None:
+    """Layout-aware text + tables (as Markdown) via pdfplumber.
+
+    Returns ``None`` when pdfplumber is not installed, so the caller can fall
+    back to pypdf. Note: a page's ``extract_text()`` already includes table
+    cell text as flat tokens, so cell values may appear both inline and in the
+    appended Markdown table — the duplication is accepted in exchange for
+    recovering the row/column structure pypdf discards entirely.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+    parts: list[str] = []
+    try:
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text() or ""
+                if txt:
+                    parts.append(txt)
+                for table in page.extract_tables() or []:
+                    md = _render_table_markdown(table)
+                    if md:
+                        parts.append(md)
+    except Exception as exc:
+        warnings.warn(f"pdfplumber failed on {path.name}: {exc}", stacklevel=2)
+    return "\n\n".join(parts)
+
+
+def _pdf_text_pypdf(path: Path) -> str:
+    """Plain text layer via pypdf (legacy backend / fallback when pdfplumber
+    is absent)."""
     try:
         from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        pages = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                pages.append(text)
-        return "\n".join(pages)
-    except Exception:
+    except ImportError:
         return ""
+    try:
+        reader = PdfReader(str(path))
+        pages = [pg.extract_text() or "" for pg in reader.pages]
+        return "\n".join(p for p in pages if p)
+    except Exception as exc:
+        warnings.warn(f"pypdf failed on {path.name}: {exc}", stacklevel=2)
+        return ""
+
+
+def _pdf_text_ocr(path: Path) -> str:
+    """Best-effort OCR for scanned / image-only PDFs.
+
+    Requires pytesseract + the tesseract binary, and pdfplumber (whose
+    pypdfium2 backend rasterizes the pages). Warns rather than raising when the
+    toolchain is missing, so a scanned PDF is a *visible* miss instead of a
+    silent empty string.
+    """
+    try:
+        import pytesseract
+    except ImportError:
+        warnings.warn(
+            f"{path.name} has no extractable text layer and OCR is unavailable; "
+            "install the 'ocr' extra (pytesseract) plus the tesseract binary.",
+            stacklevel=2,
+        )
+        return ""
+    try:
+        import pdfplumber
+    except ImportError:
+        warnings.warn(
+            f"{path.name} needs OCR but pdfplumber (page rasterizer) is missing; "
+            "install the 'pdf' extra.",
+            stacklevel=2,
+        )
+        return ""
+    parts: list[str] = []
+    try:
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                image = page.to_image(resolution=200).original
+                parts.append(pytesseract.image_to_string(image))
+    except Exception as exc:
+        warnings.warn(f"OCR failed on {path.name}: {exc}", stacklevel=2)
+        return ""
+    return "\n".join(p for p in parts if p.strip())
+
+
+def extract_pdf_text(path: Path) -> str:
+    """Extract text from a PDF, including tables, with an OCR fallback.
+
+    Degrades gracefully by what is installed:
+
+      1. **pdfplumber** - layout/table-aware text; tables become Markdown.
+      2. **pypdf** - plain text layer (legacy fallback when pdfplumber absent).
+      3. **OCR** - pytesseract + tesseract when the text layer is effectively
+         empty (scanned / image-only PDFs).
+
+    Unlike the previous pypdf-only implementation, parse failures and a missing
+    OCR toolchain are surfaced via ``warnings`` instead of being swallowed into
+    an empty string.
+    """
+    if not _file_within_size_cap(path):
+        return ""
+    text = _pdf_text_pdfplumber(path)
+    if text is None:  # pdfplumber not installed
+        text = _pdf_text_pypdf(path)
+    if _nonspace_len(text) < _PDF_EMPTY_TEXT_THRESHOLD:
+        ocr = _pdf_text_ocr(path)
+        if _nonspace_len(ocr) > _nonspace_len(text):
+            text = ocr
+    return text or ""
 
 
 def docx_to_markdown(path: Path) -> str:
@@ -443,7 +569,6 @@ def docx_to_markdown(path: Path) -> str:
         return ""
     try:
         from docx import Document
-        from docx.oxml.ns import qn
         doc = Document(str(path))
         lines = []
         for para in doc.paragraphs:
@@ -685,7 +810,7 @@ _SKIP_FILES = {
     "composer.lock", "go.sum", "go.work.sum",
 }
 
-def _is_noise_dir(part: str, parent: "Path | None" = None) -> bool:
+def _is_noise_dir(part: str, parent: Path | None = None) -> bool:
     """Return True if this directory name looks like a venv, cache, or dep dir."""
     if part in _SKIP_DIRS:
         return True

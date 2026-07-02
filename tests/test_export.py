@@ -2,9 +2,10 @@ import json
 import re
 import tempfile
 from pathlib import Path
+
 from graphify.build import build_from_json
 from graphify.cluster import cluster
-from graphify.export import to_json, to_cypher, to_graphml, to_html, to_canvas, to_obsidian
+from graphify.export import to_canvas, to_cypher, to_graphml, to_html, to_json, to_obsidian
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -269,6 +270,7 @@ def test_backup_semantic_marker(tmp_path):
 def test_backup_curated_labels(tmp_path):
     """graph.json + non-default label in .graphify_labels.json → backup taken."""
     import json
+
     from graphify.export import backup_if_protected
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_labels.json").write_text(json.dumps({"0": "Auth Pipeline", "1": "Community 1"}))
@@ -279,6 +281,7 @@ def test_backup_curated_labels(tmp_path):
 def test_backup_default_labels_only(tmp_path):
     """All-default labels → no backup (not curated)."""
     import json
+
     from graphify.export import backup_if_protected
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_labels.json").write_text(json.dumps({"0": "Community 0", "1": "Community 1"}))
@@ -287,8 +290,9 @@ def test_backup_default_labels_only(tmp_path):
 
 def test_backup_same_day_no_accumulation(tmp_path):
     """Same content on same day returns existing backup dir without re-copying."""
-    from graphify.export import backup_if_protected
     from datetime import date
+
+    from graphify.export import backup_if_protected
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")
     b1 = backup_if_protected(tmp_path)
@@ -300,8 +304,8 @@ def test_backup_same_day_no_accumulation(tmp_path):
 
 def test_backup_same_day_changed_content(tmp_path):
     """Changed graph.json on same day overwrites the existing backup in place."""
+
     from graphify.export import backup_if_protected
-    from datetime import date
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")
     b1 = backup_if_protected(tmp_path)

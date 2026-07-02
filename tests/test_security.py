@@ -1,7 +1,6 @@
 """Tests for graphify/security.py - URL validation, safe fetch, path guards, label sanitisation."""
 from __future__ import annotations
 
-import json
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -10,22 +9,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from graphify.security import (
-    check_graph_file_size_cap,
-    sanitize_label,
-    sanitize_metadata,
-    safe_fetch,
-    safe_fetch_text,
-    validate_graph_path,
-    validate_url,
-    _MAX_FETCH_BYTES,
     _MAX_GRAPH_FILE_BYTES,
-    _MAX_TEXT_BYTES,
     _METADATA_MAX_LIST_ITEMS,
     _METADATA_MAX_VALUE_LEN,
     _sanitize_metadata_string,
     _sanitize_metadata_value,
+    check_graph_file_size_cap,
+    safe_fetch,
+    safe_fetch_text,
+    sanitize_label,
+    sanitize_metadata,
+    validate_graph_path,
+    validate_url,
 )
-
 
 # ---------------------------------------------------------------------------
 # validate_url
@@ -119,7 +115,7 @@ def test_safe_fetch_raises_on_size_exceeded():
 # ---------------------------------------------------------------------------
 
 def test_safe_fetch_text_decodes_utf8():
-    content = "héllo wörld".encode("utf-8")
+    content = "héllo wörld".encode()
     mock_resp = _make_mock_response(content)
     with patch("graphify.security._build_opener") as mock_opener_fn:
         mock_opener = MagicMock()

@@ -10,13 +10,13 @@ section, run the installer, and assert that the on-disk file now contains
 the new query-first wording and does not contain the old report-first text.
 """
 from __future__ import annotations
+
 import json
 from pathlib import Path
 
 import pytest
 
 import graphify.__main__ as mainmod
-
 
 # A representative slice of the pre-fix text. Each platform's old install
 # wrote a variant of "ALWAYS read graphify-out/GRAPH_REPORT.md before ...".

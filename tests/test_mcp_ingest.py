@@ -4,14 +4,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from graphify.mcp_ingest import (
     MCP_CONFIG_FILENAMES,
     extract_mcp_config,
     is_mcp_config_path,
 )
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

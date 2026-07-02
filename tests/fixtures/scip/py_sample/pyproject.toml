@@ -1,0 +1,8 @@
+# Minimal, self-contained project root for the SCIP fixture.
+# Its presence stops scip-python from climbing to the parent graphify
+# pyproject.toml, so emitted symbols use the clean module path `pkg.*`
+# and a pinned version (1.0.0) instead of graphify's release version.
+[project]
+name = "py_sample"
+version = "1.0.0"
+requires-python = ">=3.10"

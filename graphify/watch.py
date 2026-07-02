@@ -1,5 +1,6 @@
 # monitor a folder and auto-trigger --update when files change
 from __future__ import annotations
+
 import contextlib
 import json
 import os
@@ -10,6 +11,7 @@ from pathlib import Path
 
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
 from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
+
 _PENDING_FILENAME = ".pending_changes"
 _PENDING_DRAIN_MAX_PASSES = 20
 
@@ -68,7 +70,7 @@ def _drain_pending(out_dir: Path) -> list[Path]:
     return out
 
 
-def _merge_changed_paths(*sources: "list[Path] | None") -> list[Path]:
+def _merge_changed_paths(*sources: list[Path] | None) -> list[Path]:
     """Concatenate path lists, preserving order and dropping duplicates.
 
     Used to combine a hook process's own ``changed_paths`` with the drained
@@ -190,10 +192,10 @@ def _git_head() -> str | None:
 from graphify.detect import (
     CODE_EXTENSIONS,
     DOC_EXTENSIONS,
-    PAPER_EXTENSIONS,
     IMAGE_EXTENSIONS,
-    _load_graphifyignore,
+    PAPER_EXTENSIONS,
     _is_ignored,
+    _load_graphifyignore,
 )
 
 _WATCHED_EXTENSIONS = CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS
@@ -352,10 +354,10 @@ def _check_shrink(
     force: bool,
     existing_data: dict,
     new_data: dict,
-    tmp: "Path | None" = None,
+    tmp: Path | None = None,
     *,
     had_explicit_deletions: bool = False,
-    rebuilt_sources: "set[str] | None" = None,
+    rebuilt_sources: set[str] | None = None,
 ) -> bool:
     """Return True (ok to proceed) or False (shrink refused).
 
@@ -503,13 +505,14 @@ def _rebuild_code(
     project_root = Path.cwd().resolve() if not watch_path.is_absolute() else watch_root
     report_root = _report_root_label(watch_path)
     try:
-        from graphify.extract import extract, _get_extractor
-        from graphify.detect import detect
-        from graphify.build import build_from_json, _norm_source_file as _nsf
+        from graphify.analyze import god_nodes, suggest_questions, surprising_connections
+        from graphify.build import _norm_source_file as _nsf
+        from graphify.build import build_from_json
         from graphify.cluster import cluster, remap_communities_to_previous, score_all
-        from graphify.analyze import god_nodes, surprising_connections, suggest_questions
+        from graphify.detect import detect
+        from graphify.export import to_html, to_json
+        from graphify.extract import _get_extractor, extract
         from graphify.report import generate
-        from graphify.export import to_json, to_html
         from graphify.security import check_graph_file_size_cap
 
         detected = detect(watch_path, follow_symlinks=follow_symlinks)
@@ -681,7 +684,8 @@ def _rebuild_code(
             # Dedupe parallel edges (the clustered path's DiGraph collapses them implicitly);
             # without it, --no-cluster + repeated `update` accumulate duplicates and edge
             # counts diverge across build modes (#1317).
-            from graphify.build import dedupe_edges as _dedupe_edges, dedupe_nodes as _dedupe_nodes
+            from graphify.build import dedupe_edges as _dedupe_edges
+            from graphify.build import dedupe_nodes as _dedupe_nodes
             candidate_graph_data = {
                 **{k: v for k, v in result.items() if k not in ("edges", "nodes")},
                 "nodes": _dedupe_nodes(result.get("nodes", [])),
@@ -916,9 +920,9 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
     running on every keystroke when many files are saved at once).
     """
     try:
+        from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
         from watchdog.observers.polling import PollingObserver
-        from watchdog.events import FileSystemEventHandler
     except ImportError as e:
         raise ImportError("watchdog not installed. Run: pip install watchdog") from e
 
@@ -969,8 +973,8 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
     observer.start()
 
     print(f"[graphify watch] Watching {watch_path.resolve()} - press Ctrl+C to stop")
-    print(f"[graphify watch] Code changes rebuild graph automatically. "
-          f"Doc/image changes require /graphify --update.")
+    print("[graphify watch] Code changes rebuild graph automatically. "
+          "Doc/image changes require /graphify --update.")
     print(f"[graphify watch] Debounce: {debounce}s")
 
     try:

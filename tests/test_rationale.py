@@ -1,9 +1,9 @@
 """Tests for rationale/docstring extraction in extract.py."""
 import textwrap
 from pathlib import Path
-import pytest
-from graphify.extract import extract_python
+
 from graphify.build import build_from_json
+from graphify.extract import extract_python
 
 
 def _write_py(tmp_path: Path, code: str) -> Path:

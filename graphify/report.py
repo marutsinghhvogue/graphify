@@ -1,7 +1,9 @@
 # generate GRAPH_REPORT.md - the human-readable audit trail
 from __future__ import annotations
+
 import re
 from datetime import date
+
 import networkx as nx
 
 
@@ -175,7 +177,7 @@ def generate(
             ]
 
     # --- Gaps section ---
-    from .analyze import _is_file_node, _is_concept_node
+    from .analyze import _is_concept_node, _is_file_node
 
     isolated = [
         n for n in G.nodes()

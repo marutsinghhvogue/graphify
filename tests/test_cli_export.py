@@ -4,13 +4,12 @@ Each test builds a minimal graph in a temp dir, runs the CLI command as a subpro
 and asserts the expected output file exists and is non-empty / valid.
 """
 from __future__ import annotations
+
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 PYTHON = sys.executable
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -32,9 +31,9 @@ def _make_graph(tmp_path: Path) -> Path:
     out.mkdir()
 
     extraction = json.loads((FIXTURES / "extraction.json").read_text())
+    from graphify.analyze import god_nodes, surprising_connections
     from graphify.build import build_from_json
     from graphify.cluster import cluster, score_all
-    from graphify.analyze import god_nodes, surprising_connections
     from graphify.export import to_json
 
     G = build_from_json(extraction)

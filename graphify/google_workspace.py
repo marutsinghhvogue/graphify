@@ -15,9 +15,9 @@ import shutil
 import subprocess
 import tempfile
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Any
-
+from typing import Any
 
 GOOGLE_WORKSPACE_EXTENSIONS = {".gdoc", ".gsheet", ".gslides"}
 

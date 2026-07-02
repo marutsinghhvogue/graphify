@@ -18,7 +18,6 @@ import pytest
 
 import graphify.__main__ as mainmod
 
-
 # --- destination map -----------------------------------------------------------
 
 

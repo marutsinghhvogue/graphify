@@ -5,10 +5,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
 import pytest
 
-from graphify.watch import _notify_only, _WATCHED_EXTENSIONS, _rebuild_lock, _check_shrink
-
+from graphify.watch import _WATCHED_EXTENSIONS, _check_shrink, _notify_only, _rebuild_lock
 
 # --- _notify_only ---
 
@@ -180,6 +180,7 @@ def test_rebuild_code_evicts_nodes_from_deleted_files(tmp_path):
     """#1007: graphify update (_rebuild_code with no changed_paths) must remove
     nodes and edges from files deleted since the last run."""
     import json
+
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -212,6 +213,7 @@ def test_rebuild_code_evicts_removed_symbol_from_surviving_file(tmp_path):
     symbol removed from a file that still exists — and its inbound call edge —
     without dropping genuine semantic nodes that share the surviving file."""
     import json
+
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -285,6 +287,7 @@ def test_rebuild_code_preupgrade_marker_less_node_one_cycle_lag(tmp_path):
     (no data loss); it self-heals once the node has been stamped `_origin="ast"`
     (which a full re-extraction does for every surviving symbol)."""
     import json
+
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -368,7 +371,7 @@ def test_rebuild_code_is_idempotent_when_cluster_ids_flap(tmp_path, monkeypatch)
         return {7: nodes}
 
     monkeypatch.setattr(cluster_mod, "cluster", flaky_cluster)
-    monkeypatch.setattr(cluster_mod, "score_all", lambda _G, comm: {cid: 1.0 for cid in comm})
+    monkeypatch.setattr(cluster_mod, "score_all", lambda _G, comm: dict.fromkeys(comm, 1.0))
 
     assert _rebuild_code(tmp_path)
     graph_path = tmp_path / "graphify-out" / "graph.json"
@@ -400,7 +403,7 @@ def test_rebuild_code_skips_cluster_when_topology_unchanged(tmp_path, monkeypatc
         return {0: sorted(G.nodes())}
 
     monkeypatch.setattr(cluster_mod, "cluster", cluster_once)
-    monkeypatch.setattr(cluster_mod, "score_all", lambda _G, comm: {cid: 1.0 for cid in comm})
+    monkeypatch.setattr(cluster_mod, "score_all", lambda _G, comm: dict.fromkeys(comm, 1.0))
 
     assert _rebuild_code(tmp_path)
     assert _rebuild_code(tmp_path)
@@ -425,6 +428,7 @@ def test_watch_handler_honors_graphifyignore(tmp_path, monkeypatch):
     Time Machine writes, …) don't wake the rebuild pipeline.
     """
     import threading
+
     from graphify import watch as watch_mod
 
     watch_root = tmp_path / ".hidden-parent" / "corpus"
@@ -471,8 +475,9 @@ def test_watch_loads_graphifyignore_once(tmp_path, monkeypatch):
     thousands of times per second.
     """
     import threading
-    from graphify import watch as watch_mod
+
     from graphify import detect as detect_mod
+    from graphify import watch as watch_mod
 
     (tmp_path / ".graphifyignore").write_text("ignored/\n", encoding="utf-8")
     (tmp_path / "ignored").mkdir()
@@ -727,7 +732,7 @@ def test_rebuild_code_accepts_repo_relative_changed_path_for_subdir_root(tmp_pat
 def test_queue_and_drain_pending_round_trip(tmp_path):
     """_queue_pending writes one path per line; _drain_pending reads + unlinks
     and returns the same set of paths."""
-    from graphify.watch import _queue_pending, _drain_pending, _PENDING_FILENAME
+    from graphify.watch import _PENDING_FILENAME, _drain_pending, _queue_pending
 
     out = tmp_path / "graphify-out"
     paths = [Path("a.py"), Path("sub/b.py"), Path("c.md")]
@@ -750,7 +755,7 @@ def test_queue_and_drain_pending_round_trip(tmp_path):
 def test_drain_pending_dedupes_and_skips_blank_lines(tmp_path):
     """Repeated appends across concurrent contenders must dedupe; partial
     writes leaving blank lines must not poison the merge."""
-    from graphify.watch import _queue_pending, _drain_pending
+    from graphify.watch import _drain_pending, _queue_pending
 
     out = tmp_path / "graphify-out"
     _queue_pending(out, [Path("a.py"), Path("b.py")])
@@ -765,7 +770,7 @@ def test_drain_pending_dedupes_and_skips_blank_lines(tmp_path):
 
 def test_queue_pending_noop_on_empty_list(tmp_path):
     """Empty change set must not create an empty .pending_changes file."""
-    from graphify.watch import _queue_pending, _PENDING_FILENAME
+    from graphify.watch import _PENDING_FILENAME, _queue_pending
 
     out = tmp_path / "graphify-out"
     _queue_pending(out, [])
@@ -777,7 +782,7 @@ def test_rebuild_code_queues_on_lock_contention(tmp_path, monkeypatch, capsys):
     """#1059: when the rebuild lock is held, an incremental hook must queue
     its changed_paths to .pending_changes and print 'queued' instead of
     silently dropping the change set."""
-    from graphify.watch import _rebuild_code, _rebuild_lock, _PENDING_FILENAME
+    from graphify.watch import _PENDING_FILENAME, _rebuild_code, _rebuild_lock
 
     out = tmp_path / "graphify-out"
     out.mkdir()

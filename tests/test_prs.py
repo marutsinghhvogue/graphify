@@ -3,23 +3,21 @@ from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import networkx as nx
-import pytest
 
 from graphify.prs import (
     PRInfo,
     _classify,
+    _detect_default_branch,
     _parse_ci,
     _path_match,
     build_community_labels,
     compute_pr_impact,
     fetch_worktrees,
     format_prs_text,
-    _detect_default_branch,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

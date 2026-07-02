@@ -1,11 +1,9 @@
 """Tests for graphify.querylog."""
 import json
-import os
+
 import pytest
-from pathlib import Path
 
 from graphify.querylog import log_query, nodes_from_result
-
 
 # ---------------------------------------------------------------------------
 # nodes_from_result

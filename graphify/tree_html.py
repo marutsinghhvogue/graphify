@@ -38,7 +38,7 @@ import html as _html
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 DEFAULT_MAX_CHILDREN = 200
 
@@ -46,7 +46,7 @@ DEFAULT_MAX_CHILDREN = 200
 # ── Tree builder (filesystem hierarchy → JSON) ──────────────────
 
 
-def _common_root(paths: List[str]) -> str:
+def _common_root(paths: list[str]) -> str:
     if not paths:
         return ""
     parts = [Path(p).parts for p in paths if p]
@@ -61,24 +61,24 @@ def _common_root(paths: List[str]) -> str:
     return str(Path(*common)) if common else ""
 
 
-def _make_truncation_leaf(extra: int) -> Dict[str, Any]:
+def _make_truncation_leaf(extra: int) -> dict[str, Any]:
     return {"name": f"(+{extra} more)", "total_count": extra, "children": []}
 
 
 def build_tree(
-    graph: Dict[str, Any],
+    graph: dict[str, Any],
     *,
-    root: Optional[str] = None,
+    root: str | None = None,
     max_children: int = DEFAULT_MAX_CHILDREN,
-    project_label: Optional[str] = None,
-) -> Dict[str, Any]:
+    project_label: str | None = None,
+) -> dict[str, Any]:
     """Build a ``{name, total_count, children}`` hierarchy.
 
     Each leaf is either a code symbol (class / top-level function) or
     a synthetic "(+N more)" placeholder for truncated wide directories.
     Each interior node carries ``total_count = sum of leaf counts``.
     """
-    nodes: List[Dict[str, Any]] = list(graph.get("nodes", []))
+    nodes: list[dict[str, Any]] = list(graph.get("nodes", []))
     file_nodes = [n for n in nodes if n.get("source_file")]
     if not file_nodes:
         return {"name": "(empty graph)", "total_count": 0, "children": []}
@@ -87,19 +87,19 @@ def build_tree(
         root = _common_root([n["source_file"] for n in file_nodes])
     root_path = Path(root)
 
-    by_file: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for n in file_nodes:
         by_file[n["source_file"]].append(n)
 
     # Build dir tree.
-    dir_index: Dict[str, Dict[str, Any]] = {}
+    dir_index: dict[str, dict[str, Any]] = {}
     label_root = project_label or root_path.name or root or "/"
-    root_node: Dict[str, Any] = {
+    root_node: dict[str, Any] = {
         "name": label_root, "total_count": 0, "children": [],
     }
     dir_index[str(root_path)] = root_node
 
-    def _ensure_dir(abs_path: Path) -> Dict[str, Any]:
+    def _ensure_dir(abs_path: Path) -> dict[str, Any]:
         key = str(abs_path)
         if key in dir_index:
             return dir_index[key]
@@ -122,7 +122,7 @@ def build_tree(
         parent_dir = _ensure_dir(parent_path)
 
         # File node — children are the symbols.
-        sym_children: List[Dict[str, Any]] = []
+        sym_children: list[dict[str, Any]] = []
         for n in syms:
             label = n.get("label", n.get("id", "?"))
             # Skip the redundant file-name node graphify emits.
@@ -151,7 +151,7 @@ def build_tree(
         parent_dir["children"].append(file_node)
 
     # Sort each dir's children + propagate total_count up.
-    def _finalise(d: Dict[str, Any]) -> int:
+    def _finalise(d: dict[str, Any]) -> int:
         kids = d.get("children") or []
         kids.sort(key=lambda c: (
             0 if (c.get("children") and len(c["children"]) > 0) else 1,
@@ -540,7 +540,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 
 def emit_html(
-    tree: Dict[str, Any],
+    tree: dict[str, Any],
     *,
     title: str,
     header: str,
@@ -563,9 +563,9 @@ def write_tree_html(
     graph_path: Path,
     output_path: Path,
     *,
-    root: Optional[str] = None,
+    root: str | None = None,
     max_children: int = DEFAULT_MAX_CHILDREN,
-    project_label: Optional[str] = None,
+    project_label: str | None = None,
     # kept for CLI compatibility with the older signature; ignored now
     top_k_edges: int = 0,
 ) -> Path:

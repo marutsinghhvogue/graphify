@@ -6,14 +6,15 @@ import json
 import os
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .cache import load_cached, save_cached
 from .ids import make_id
-from .mcp_ingest import extract_mcp_config, is_mcp_config_path
 from .manifest_ingest import extract_package_manifest, is_package_manifest_path
+from .mcp_ingest import extract_mcp_config, is_mcp_config_path
 
 _RECURSION_LIMIT = 10_000
 
@@ -1324,7 +1325,7 @@ def _import_python(node, source: bytes, file_nid: str, stem: str, edges: list, s
             })
 
 
-def _resolve_js_import_target(raw: str, str_path: str) -> "tuple[str, Path | None] | None":
+def _resolve_js_import_target(raw: str, str_path: str) -> tuple[str, Path | None] | None:
     """Resolve a JS/TS import path string to (target_nid, resolved_path).
 
     Handles relative paths, tsconfig path aliases, workspace packages, and
@@ -1354,7 +1355,7 @@ def _import_js(node, source: bytes, file_nid: str, stem: str, edges: list, str_p
             if not has_from:
                 return
 
-    resolved_path: "Path | None" = None
+    resolved_path: Path | None = None
     for child in node.children:
         if child.type == "string":
             raw = _read_text(child, source).strip("'\"` ")
@@ -1530,7 +1531,7 @@ def _import_java(node, source: bytes, file_nid: str, stem: str, edges: list, str
             break
 
 
-def _resolve_c_include_path(raw: str, str_path: str) -> "Path | None":
+def _resolve_c_include_path(raw: str, str_path: str) -> Path | None:
     """Resolve a quoted #include path to a real file on disk.
 
     Searches relative to the including file's directory. Returns None for
@@ -3899,7 +3900,7 @@ def _extract_python_rationale(path: Path, result: dict) -> None:
                 for sub in child.children:
                     if sub.type in ("string", "concatenated_string"):
                         text = source[sub.start_byte:sub.end_byte].decode("utf-8", errors="replace")
-                        text = text.strip("\"'").strip('"""').strip("'''").strip()
+                        text = text.strip("\"'").strip()
                         if len(text) > 20:
                             return text, child.start_point[0] + 1
             break
@@ -5361,12 +5362,12 @@ def _augment_systemverilog_semantics(
             body,
             flags=re.DOTALL,
         )
-        for field in re.finditer(r"^\s*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;", body_without_functions, re.MULTILINE):
+        for field_m in re.finditer(r"^\s*([A-Za-z_]\w*(?:\s*#\s*\([^;]+?\))?)\s+\w+\s*;", body_without_functions, re.MULTILINE):
             # Count to the start of the type token (group 1), not the match
-            # start: `^\s*` consumes the leading newline(s), so field.start()
+            # start: `^\s*` consumes the leading newline(s), so field_m.start()
             # would resolve to the class's line instead of the field's.
-            field_line = line + body_without_functions.count("\n", 0, field.start(1))
-            for ref_name, role in _sv_collect_type_refs(field.group(1), skip=type_params):
+            field_line = line + body_without_functions.count("\n", 0, field_m.start(1))
+            for ref_name, role in _sv_collect_type_refs(field_m.group(1), skip=type_params):
                 add_edge(class_nid, ref_name, "references", field_line, "generic_arg" if role == "generic_arg" else "field")
 
         for fm in _SV_FUNC_RE.finditer(body):
@@ -9877,7 +9878,7 @@ _MD_WIKILINK_RE = re.compile(r'(?<!\!)\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]')
 _MD_LINKABLE_EXTS = {".md", ".mdx", ".qmd", ".markdown", ".rst", ".txt"}
 
 
-def _resolve_markdown_link(raw: str, source_dir: Path) -> "Path | None":
+def _resolve_markdown_link(raw: str, source_dir: Path) -> Path | None:
     """Resolve a markdown link target to the absolute path of a sibling document.
 
     Returns the resolved (normalized, not necessarily existing) path when the
@@ -10957,7 +10958,7 @@ def _check_tree_sitter_version() -> None:
     except ImportError:
         raise ImportError(
             "tree-sitter is not installed. Run: pip install 'tree-sitter>=0.23.0'"
-        )
+        ) from None
     # Language API v2 starts at LANGUAGE_VERSION 14
     if LANGUAGE_VERSION < 14:
         import tree_sitter as _ts
@@ -11813,7 +11814,7 @@ def extract_dm(path: Path) -> dict:
     nodes: list[dict] = []
     edges: list[dict] = []
     seen_ids: set[str] = set()
-    function_bodies: list[tuple[str, Any, "str | None"]] = []
+    function_bodies: list[tuple[str, Any, str | None]] = []
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid and nid not in seen_ids:
@@ -11861,8 +11862,8 @@ def extract_dm(path: Path) -> dict:
             return "".join(parts)
         return _read_text(file_node, source).strip("'\"")
 
-    def walk(node, parent_type_path: "str | None" = None,
-             parent_type_nid: "str | None" = None) -> None:
+    def walk(node, parent_type_path: str | None = None,
+             parent_type_nid: str | None = None) -> None:
         t = node.type
         line = node.start_point[0] + 1
 
@@ -11922,8 +11923,8 @@ def extract_dm(path: Path) -> dict:
 
         if t in ("proc_definition", "proc_override"):
             tp_node = _find_child(node, "type_path")
-            owner_path: "str | None" = None
-            owner_nid: "str | None" = None
+            owner_path: str | None = None
+            owner_nid: str | None = None
             if tp_node is not None:
                 owner_path = _type_path_text(tp_node)
                 owner_nid = _ensure_type(owner_path, line)

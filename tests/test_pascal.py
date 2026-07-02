@@ -1,5 +1,6 @@
 """Tests for the Pascal/Delphi extractor."""
 from __future__ import annotations
+
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -297,8 +298,10 @@ def test_dfm_no_dangling_edges():
 
 
 def test_dfm_binary_returns_empty_not_crash():
+    import pathlib
+    import tempfile
+
     from graphify.extract import extract_delphi_form
-    import tempfile, pathlib
     # Write a fake binary DFM (FF 0A magic header)
     with tempfile.NamedTemporaryFile(suffix=".dfm", delete=False) as f:
         f.write(b"\xff\x0a\x00\x00some binary data")

@@ -1,8 +1,10 @@
 # Wiki export - Wikipedia-style markdown articles from the knowledge graph
 # Generates an agent-crawlable wiki: index.md + one article per community + god node articles
 from __future__ import annotations
+
 from collections import Counter
 from pathlib import Path
+
 import networkx as nx
 
 from graphify.build import edge_data

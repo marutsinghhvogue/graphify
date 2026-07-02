@@ -1,8 +1,8 @@
 """Tests for graphify.ingest.save_query_result"""
 from __future__ import annotations
-import re
-from pathlib import Path
+
 import pytest
+
 from graphify.ingest import save_query_result
 
 

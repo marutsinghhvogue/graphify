@@ -9,7 +9,7 @@ import sys
 import networkx as nx
 import pytest
 
-from graphify.llm import label_communities, generate_community_labels
+from graphify.llm import generate_community_labels, label_communities
 
 
 def _graph():
@@ -143,7 +143,7 @@ def test_label_communities_malformed_raises(monkeypatch):
     G, communities = _graph()
     monkeypatch.setattr("graphify.llm._call_llm",
                         lambda p, *, backend, max_tokens=200: "sorry, I cannot help")
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 - any error is an acceptable rejection of malformed LLM output
         label_communities(G, communities, backend="gemini")
 
 

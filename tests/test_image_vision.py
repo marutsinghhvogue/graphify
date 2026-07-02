@@ -16,8 +16,6 @@ import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from graphify import llm
 
 # A 1x1 PNG is unnecessary — the renderers never decode pixels, they only base64

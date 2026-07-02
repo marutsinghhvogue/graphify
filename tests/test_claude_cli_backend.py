@@ -234,7 +234,7 @@ def test_simple_completion_resolves_cmd_shim_on_windows(monkeypatch):
     """The label/_simple_completion path must spawn the resolved claude.cmd on
     Windows; a bare "claude" fails CreateProcess (WinError 2) under npm installs."""
     import json as _json
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     captured = {}
 

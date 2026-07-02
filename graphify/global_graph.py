@@ -1,9 +1,11 @@
 from __future__ import annotations
-import json
+
 import hashlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
 import networkx as nx
 from networkx.readwrite import json_graph as _jg
 

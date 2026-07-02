@@ -49,9 +49,13 @@ Issues = "https://github.com/safishamsi/graphify/issues"
 
 [project.optional-dependencies]
 mcp = ["mcp"]
+web = ["flask"]
 neo4j = ["neo4j"]
 falkordb = ["falkordb"]
-pdf = ["pypdf>=6.12.0", "markdownify"]
+pdf = ["pypdf>=6.12.0", "markdownify", "pdfplumber>=0.11"]
+# OCR fallback for scanned / image-only PDFs. Also needs the 'pdf' extra
+# (pdfplumber's pypdfium2 rasterizes pages) and the tesseract system binary.
+ocr = ["pytesseract>=0.3.10"]
 watch = ["watchdog"]
 svg = ["matplotlib", "numpy>=2.0; python_version >= '3.13'"]
 leiden = ["graspologic; python_version < '3.13'"]
@@ -72,7 +76,10 @@ sql = ["tree-sitter-sql"]
 # avoids breaking the default `uv tool install graphifyy` for everyone (#1104).
 dm = ["tree-sitter-dm"]
 terraform = ["tree-sitter-hcl"]
-all = ["mcp", "neo4j", "falkordb", "pypdf>=6.12.0", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.6.9", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm", "tree-sitter-hcl"]
+# Read real index.scip (protobuf) from scip-python / scip-typescript / etc.
+# Bound matches the vendored graphify/scip_pb2.py gencode (protoc 6.33.5).
+scip = ["protobuf>=6.33.5"]
+all = ["mcp", "flask", "neo4j", "falkordb", "pypdf>=6.12.0", "markdownify", "pdfplumber>=0.11", "pytesseract>=0.3.10", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.6.9", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm", "tree-sitter-hcl", "protobuf>=6.33.5"]
 
 [project.scripts]
 graphify = "graphify.__main__:main"
@@ -92,6 +99,11 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.15.13",
     "safety>=3.7.0",
+    "pdfplumber>=0.11",
+    "pypdf>=6.12.0",
+    "pytesseract>=0.3.10",
+    "reportlab>=4.0",
+    "protobuf>=6.33.5",
     "setuptools>=82.0.1",
     "wheel>=0.47.0",
     "tomli>=2.0 ; python_version < '3.11'",
@@ -129,10 +141,31 @@ skips = ["B404"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Generated protobuf bindings — never lint or auto-fix machine-generated code.
+extend-exclude = ["*_pb2.py"]
 
 [tool.ruff.lint]
-# Keep the committed baseline conservative until upstream adopts a broader lint policy.
-select = ["E9", "F63", "F7", "F82"]
+# Ramped from the original E9/F63/F7/F82-only baseline. Enabled families:
+#   F  pyflakes  (unused imports/vars, undefined names, bad f-strings)
+#   E/W pycodestyle errors & warnings
+#   B  flake8-bugbear        (likely bugs, e.g. raise-without-from)
+#   I  isort                 (import ordering)
+#   UP pyupgrade             (modern syntax for the py310 floor)
+#   C4 flake8-comprehensions
+# The `ignore` list defers high-volume or stylistic rules to a later ramp so the
+# tree stays green today; each entry is a known follow-up, not a non-issue.
+select = ["E", "F", "W", "B", "I", "UP", "C4"]
+ignore = [
+    "E501",  # line-too-long (~820) — defer; large churn, not auto-fixable
+    "E741",  # ambiguous variable name l/I/O (~155) — stylistic
+    "E701",  # multiple statements on one line (colon)
+    "E702",  # multiple statements on one line (semicolon)
+    "E402",  # module-import-not-at-top — many are intentional lazy imports
+    "F841",  # local assigned but never used (~13) — defer
+    "B007",  # unused loop control variable — defer
+    "B023",  # function-uses-loop-variable (~21) — needs case-by-case review
+    "B905",  # zip() without explicit strict= — defer (py310-compatible as-is)
+]
 
 [tool.pyright]
 include = ["graphify", "tests"]

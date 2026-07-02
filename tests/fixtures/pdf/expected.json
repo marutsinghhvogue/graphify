@@ -1,0 +1,55 @@
+{
+  "_comment": "Expected extraction output, derived from the same constants that draw the PDFs. See _make_pdf_fixtures.py.",
+  "tables.pdf": {
+    "text_contains": [
+      "Quarterly Report",
+      "Revenue by region for fiscal year 2025."
+    ],
+    "table_rows": [
+      [
+        "Region",
+        "Q1",
+        "Q2",
+        "Q3"
+      ],
+      [
+        "North",
+        "100",
+        "120",
+        "140"
+      ],
+      [
+        "South",
+        "90",
+        "95",
+        "99"
+      ],
+      [
+        "East",
+        "70",
+        "80",
+        "85"
+      ]
+    ],
+    "baseline_pypdf": "flattens the table into ungridded text; cells are present as tokens but row/column structure is lost."
+  },
+  "scanned.pdf": {
+    "text_layer_is_empty": true,
+    "ocr_words_contains": [
+      "Invoice",
+      "4815",
+      "Northwind",
+      "PAID",
+      "2380"
+    ],
+    "baseline_pypdf": "returns empty string (no text layer)."
+  },
+  "two_column.pdf": {
+    "text_contains": [
+      "LEFTCOLUMN",
+      "RIGHTCOLUMN"
+    ],
+    "left_before_right": true,
+    "note": "Column-correct ordering is a known hard case; documented, not yet guaranteed."
+  }
+}

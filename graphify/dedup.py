@@ -4,14 +4,15 @@ Pipeline: exact normalization → entropy gate → MinHash/LSH blocking →
 Jaro-Winkler verification → same-community boost → union-find merge.
 """
 from __future__ import annotations
+
 import math
 import re
 import unicodedata
 from collections import defaultdict
 
-from graphify._minhash import MinHash, MinHashLSH
 from rapidfuzz.distance import Jaro, JaroWinkler
 
+from graphify._minhash import MinHash, MinHashLSH
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

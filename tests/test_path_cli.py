@@ -1,8 +1,8 @@
 """Regression tests for `graphify path` arrow direction (#849)."""
 from __future__ import annotations
+
 import json
-import networkx as nx
-from networkx.readwrite import json_graph
+
 import graphify.__main__ as mainmod
 
 

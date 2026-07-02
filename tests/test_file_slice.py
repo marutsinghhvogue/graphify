@@ -15,7 +15,6 @@ from graphify.file_slice import (
     unit_path,
 )
 
-
 # ── slice_boundaries: coverage + bounds invariants ──────────────────────────
 
 def test_slice_boundaries_small_text_is_one_range():

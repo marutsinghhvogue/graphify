@@ -1,0 +1,432 @@
+{
+  "documents": [
+    {
+      "relative_path": "src/animals.ts",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            21,
+            0
+          ]
+        },
+        {
+          "range": [
+            0,
+            17,
+            23
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            2,
+            1
+          ]
+        },
+        {
+          "range": [
+            1,
+            2,
+            7
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#speak().",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            4,
+            13,
+            16
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            4,
+            0,
+            14,
+            1
+          ]
+        },
+        {
+          "range": [
+            4,
+            28,
+            34
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            5,
+            2,
+            7
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#speak().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            5,
+            2,
+            7,
+            3
+          ]
+        },
+        {
+          "range": [
+            11,
+            2,
+            6
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#save().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            11,
+            2,
+            13,
+            3
+          ]
+        },
+        {
+          "range": [
+            16,
+            13,
+            16
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Cat#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            16,
+            0,
+            20,
+            1
+          ]
+        },
+        {
+          "range": [
+            16,
+            28,
+            34
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            17,
+            2,
+            7
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Cat#speak().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            17,
+            2,
+            19,
+            3
+          ]
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#speak()."
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Cat#",
+          "relationships": [
+            {
+              "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#",
+              "is_implementation": true
+            }
+          ]
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Cat#speak().",
+          "relationships": [
+            {
+              "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#speak().",
+              "is_reference": true,
+              "is_implementation": true
+            }
+          ]
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#",
+          "relationships": [
+            {
+              "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#",
+              "is_implementation": true
+            }
+          ]
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#save()."
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#speak().",
+          "relationships": [
+            {
+              "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Animal#speak().",
+              "is_reference": true,
+              "is_implementation": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relative_path": "src/main.ts",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`main.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            11,
+            0
+          ]
+        },
+        {
+          "range": [
+            0,
+            9,
+            12
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            0,
+            20,
+            31
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            1,
+            9,
+            17
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            1,
+            25,
+            36
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            3,
+            16,
+            19
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`main.ts`/run().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            0,
+            10,
+            1
+          ]
+        },
+        {
+          "range": [
+            4,
+            8,
+            9
+          ],
+          "symbol": "local 2",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            4,
+            16,
+            19
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            5,
+            2,
+            3
+          ],
+          "symbol": "local 2",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            5,
+            4,
+            9
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#speak().",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            6,
+            2,
+            3
+          ],
+          "symbol": "local 2",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            6,
+            4,
+            8
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`animals.ts`/Dog#save().",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            8,
+            8,
+            10
+          ],
+          "symbol": "local 5",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            8,
+            17,
+            25
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            9,
+            2,
+            4
+          ],
+          "symbol": "local 5",
+          "symbol_roles": 0
+        },
+        {
+          "range": [
+            9,
+            5,
+            9
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#save().",
+          "symbol_roles": 0
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "local 2"
+        },
+        {
+          "symbol": "local 5"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`main.ts`/"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`main.ts`/run()."
+        }
+      ]
+    },
+    {
+      "relative_path": "src/storage.ts",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            8,
+            0
+          ]
+        },
+        {
+          "range": [
+            0,
+            13,
+            21
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            7,
+            1
+          ]
+        },
+        {
+          "range": [
+            4,
+            2,
+            6
+          ],
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#save().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            4,
+            2,
+            6,
+            3
+          ]
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#"
+        },
+        {
+          "symbol": "scip-typescript npm scip-ts-sample 1.0.0 src/`storage.ts`/Database#save()."
+        }
+      ]
+    }
+  ]
+}

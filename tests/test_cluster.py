@@ -1,7 +1,8 @@
 import json
-import sys
-import networkx as nx
 from pathlib import Path
+
+import networkx as nx
+
 from graphify.build import build_from_json
 from graphify.cluster import cluster, cohesion_score, remap_communities_to_previous, score_all
 

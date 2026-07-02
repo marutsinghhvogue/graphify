@@ -17,8 +17,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
 from graphify.ingest import save_query_result
 from graphify.reflect import (
     aggregate_lessons,
@@ -545,9 +543,9 @@ def _make_graph(tmp_path: Path) -> Path:
     out = tmp_path / "graphify-out"
     out.mkdir()
     extraction = json.loads((FIXTURES / "extraction.json").read_text())
+    from graphify.analyze import god_nodes, surprising_connections
     from graphify.build import build_from_json
     from graphify.cluster import cluster, score_all
-    from graphify.analyze import god_nodes, surprising_connections
     from graphify.export import to_json
 
     G = build_from_json(extraction)
