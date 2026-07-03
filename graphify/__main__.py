@@ -2216,6 +2216,10 @@ def main() -> None:
         print("    --graph <path>          base graph.json (default graphify-out/graph.json)")
         print("    --out <path>            output path (default: overwrite --graph)")
         print("    --force                 allow overwrite even if node count drops")
+        print("  export-pg [graph.json]  persist nodes/edges into Postgres (symbols + code_edges)")
+        print("    --repo <name>           repo/service name (required)")
+        print("    --source <label>        edge provenance / replace-scope (default: graphify)")
+        print("    --dsn <dsn>             Postgres DSN (default: PG* env vars)")
         print("    --branch <branch>       checkout a specific branch (default: repo default)")
         print("    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)")
         print("  add <url>               fetch a URL and save it to ./raw, then update the graph")
@@ -3046,6 +3050,61 @@ def main() -> None:
             f"external {stats['external']}\n"
             f"  graph now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
+    elif cmd == "export-pg":
+        # graphify export-pg [graph.json] --repo R --source S [--dsn DSN]
+        # Persist a graph's nodes/edges into Postgres (symbols + code_edges) so
+        # Graphify stays a stateless extractor. --dsn omitted uses PG* env vars.
+        graph_path = _default_graph_path()
+        repo: str | None = None
+        source = "graphify"
+        dsn: str | None = None
+        args = sys.argv[2:]
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in ("--repo", "--source", "--dsn", "--graph") and i + 1 < len(args):
+                val = args[i + 1]
+                if a == "--repo":
+                    repo = val
+                elif a == "--source":
+                    source = val
+                elif a == "--dsn":
+                    dsn = val
+                else:
+                    graph_path = val
+                i += 2
+            elif a.startswith(("--repo=", "--source=", "--dsn=", "--graph=")):
+                key, val = a.split("=", 1)
+                if key == "--repo":
+                    repo = val
+                elif key == "--source":
+                    source = val
+                elif key == "--dsn":
+                    dsn = val
+                else:
+                    graph_path = val
+                i += 1
+            elif not a.startswith("--"):
+                graph_path = a
+                i += 1
+            else:
+                i += 1
+        if not repo:
+            print("error: --repo is required (e.g. --repo user-service)", file=sys.stderr)
+            sys.exit(1)
+        gp = Path(graph_path).resolve()
+        if not gp.exists():
+            print(f"error: graph file not found: {gp} (run `graphify extract` first)", file=sys.stderr)
+            sys.exit(1)
+        raw = json.loads(gp.read_text(encoding="utf-8"))
+        from graphify.pg_export import export_to_postgres
+        try:
+            counts = export_to_postgres(raw, repo=repo, source=source, dsn=dsn)
+        except (ImportError, ConnectionError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Exported to Postgres (repo={repo}, source={source}): "
+              f"{counts['symbols']} symbols, {counts['edges']} edges")
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]

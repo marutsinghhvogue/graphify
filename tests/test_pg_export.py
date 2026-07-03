@@ -141,3 +141,47 @@ def test_core_schema_has_no_pgvector_dependency():
     # structural sink must run on vanilla Postgres (embeddings live elsewhere)
     assert "vector" not in CORE_SCHEMA_SQL.lower()
     assert "symbols" in CORE_SCHEMA_SQL and "code_edges" in CORE_SCHEMA_SQL
+
+
+# --- CLI: graphify export-pg ---
+
+def _write_graph(tmp_path):
+    import json
+    p = tmp_path / "graph.json"
+    p.write_text(json.dumps({
+        "nodes": [{"id": "a", "label": "a()", "source_file": "m.py", "source_location": "L1"}],
+        "links": [{"source": "a", "target": "a", "relation": "self",
+                   "confidence": "EXTRACTED", "source_file": "m.py", "source_location": "L1"}],
+    }))
+    return p
+
+
+def test_cli_export_pg(monkeypatch, tmp_path, capsys):
+    import graphify.__main__ as mainmod
+    log: list = []
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(log))
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    gp = _write_graph(tmp_path)
+    monkeypatch.setattr(mainmod.sys, "argv",
+        ["graphify", "export-pg", str(gp), "--repo", "svcX", "--source", "scip"])
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "repo=svcX, source=scip" in out
+    assert "1 symbols, 1 edges" in out
+    # scoped delete used the right (repo, source)
+    assert any(k == "execute" and params == ("svcX", "scip")
+               for (k, _sql, params) in log if k == "execute")
+
+
+def test_cli_export_pg_requires_repo(monkeypatch, tmp_path, capsys):
+    import graphify.__main__ as mainmod
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    gp = _write_graph(tmp_path)
+    monkeypatch.setattr(mainmod.sys, "argv", ["graphify", "export-pg", str(gp)])
+    try:
+        mainmod.main()
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised
+    assert "--repo is required" in capsys.readouterr().err
