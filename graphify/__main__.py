@@ -4851,19 +4851,27 @@ def main() -> None:
         # source='contract' so they export cleanly and blast radius keeps them.
         xsvc_result: dict = {"nodes": [], "edges": []}
         if cli_cross_service:
-            from graphify.contract_introspect import cross_service_graph
+            from graphify.contract_introspect import cross_service_graph, reconcile_contract
             print("[graphify extract] inferring cross-service edges...")
             try:
-                xsvc_result = cross_service_graph(target)
+                xsvc_raw = cross_service_graph(target)
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(1)
-            _xs = xsvc_result.get("stats", {})
-            print(f"[graphify extract] cross-service: {len(xsvc_result['nodes'])} nodes, "
+            # Reconcile contract handler/consumer nodes onto the AST nodes for the
+            # same functions so cross-service edges attach to real code nodes (and
+            # blast radius can traverse into them), not a disconnected svc_* island.
+            # Stamps metadata.service on the matched AST nodes in place.
+            xsvc_result = reconcile_contract(ast_result, xsvc_raw)
+            _xs = xsvc_raw.get("stats", {})
+            _rec = xsvc_result.get("reconciliation", {})
+            print(f"[graphify extract] cross-service: {len(xsvc_result['nodes'])} new nodes, "
                   f"{len(xsvc_result['edges'])} edges "
                   f"({_xs.get('matched_unique', 0)} matched, "
                   f"{_xs.get('matched_ambiguous', 0)} ambiguous, "
-                  f"{_xs.get('external', 0)} external)")
+                  f"{_xs.get('external', 0)} external); "
+                  f"reconciled {_rec.get('matched', 0)}/{_rec.get('contract_fn_nodes', 0)} "
+                  f"handlers onto AST nodes")
 
         # Merge AST + semantic + pg_result + cargo_result + xsvc_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels

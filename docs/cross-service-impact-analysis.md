@@ -11,12 +11,21 @@ afterward. Tests: `tests/test_contract_introspect.py` (inference) +
 `tests/test_extract_cli.py::test_extract_cross_service_wires_calls_service_edges`
 (CLI wiring); fixtures under `tests/fixtures/xservice`.
 
-**Known limitation (next step):** the contract handler/endpoint nodes use their
-own `svc_*` id scheme, so they are a self-consistent subgraph but are **not yet
-reconciled with the tree-sitter AST function nodes** for the same handlers —
-analogous to the SCIP `reconcile_scip` merge. Until that lands, blast radius
-traversing from an AST function node won't automatically cross into the
-cross-service edges. Reconciliation-on-identity is the follow-up.
+**Reconciled with the AST graph (`reconcile_contract`).** Contract handler and
+consumer *function* nodes are joined onto the tree-sitter AST nodes for the same
+functions on `(path-suffix, function-name)` — the contract analog of SCIP's
+`reconcile_scip`. A handler that matches exactly one AST node is folded into it
+(the AST node stays canonical and is stamped `metadata.service`; the `svc_*_fn_*`
+node is dropped and its edges repointed), so `calls_service` edges connect **real
+AST node → AST node across services** and blast radius traversing from a code
+node crosses the boundary. Endpoint (`route`) nodes have no AST twin and are kept
+as new; contract fn nodes matching 0 or >1 AST nodes are kept as new (never
+name-guessed), preserving recall. Verified on `tests/fixtures/xservice`: 4/4
+handlers reconciled; the NestJS `getOrder` consumer reaches the Python `get_user`
+and Java `getInvoice` handlers as AST-to-AST edges.
+
+**Remaining next step:** field/schema-level granularity (endpoint-level only
+today) and broader consumer harvest — see the roadmap below.
 
 ## The two questions this targets
 

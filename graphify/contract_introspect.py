@@ -300,3 +300,125 @@ def cross_service_graph(root: str | Path) -> dict[str, Any]:
             })
 
     return {"nodes": list(nodes.values()), "edges": edges, "stats": stats}
+
+
+# ── reconciliation with the tree-sitter AST graph ─────────────────────────────
+#
+# cross_service_graph emits handler/consumer function nodes under a self-contained
+# ``svc_*`` id scheme, so cross-service edges form a subgraph disconnected from the
+# tree-sitter AST nodes for the SAME handlers. reconcile_contract joins them on
+# identity so blast radius can traverse from a real AST function node into the
+# cross-service edges — the contract analog of scip_ingest.reconcile_scip.
+#
+# Join key = (path-suffix, normalized-function-name). SCIP joins on a definition
+# line; contract handler nodes carry the route-decorator line, not the def line,
+# so the name (with the file) is the reliable key.
+
+
+def _norm_fn_name(label: str) -> str:
+    """Canonical function name from a node label: drop a leading ``.`` (method
+    qualifier) and a trailing ``()`` call marker, case-fold. ``get_user()`` →
+    ``get_user``; ``.getOrder()`` → ``getorder``."""
+    s = (label or "").strip()
+    if s.startswith("."):
+        s = s[1:]
+    if s.endswith("()"):
+        s = s[:-2]
+    return s.strip().lower()
+
+
+def _path_suffix_match(a: str, b: str) -> bool:
+    """True if two paths share a trailing path-component suffix (either endswith
+    the other), so same-named handlers in different services don't cross-match."""
+    pa = [p for p in a.replace("\\", "/").split("/") if p]
+    pb = [p for p in b.replace("\\", "/").split("/") if p]
+    n = min(len(pa), len(pb))
+    return n > 0 and pa[-n:] == pb[-n:]
+
+
+def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+    """Merge contract cross-service nodes/edges onto the tree-sitter (``base``)
+    graph on ``(path-suffix, function-name)`` identity.
+
+    Each contract *function* node (``kind='function'``) that lands on exactly one
+    base AST node is folded into it: the AST node stays canonical and is stamped
+    ``metadata.service``; the contract id maps to it and its edges are rewritten
+    onto it. Endpoint (``kind='route'``) nodes have no AST twin and are kept as
+    new; contract function nodes matching 0 or >1 base nodes are also kept —
+    never name-guessed — mirroring ``reconcile_scip``.
+
+    Returns ``{"nodes": <contract nodes to ADD>, "edges": <endpoint-rewritten
+    edges>, "reconciliation": {...}}``. ``base`` node dicts are mutated in place
+    (service stamped) but NOT returned — the caller already holds them.
+    """
+    from collections import defaultdict
+
+    base_nodes = list(base.get("nodes", []))
+    c_nodes = list(contract.get("nodes", []))
+    c_edges = list(contract.get("edges", contract.get("links", [])))
+
+    by_name: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for n in base_nodes:
+        base_name = (n.get("source_file") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        label = n.get("label") or ""
+        if label == base_name:
+            continue  # file-container node, not a symbol definition
+        by_name[(base_name, _norm_fn_name(label))].append(n)
+
+    id_map: dict[str, str] = {}
+    keep: list[dict] = []
+    matched = ambiguous = unmatched = 0
+
+    for cn in c_nodes:
+        cid = cn["id"]
+        if cn.get("kind") != "function":
+            id_map[cid] = cid            # endpoint/route node — no AST twin
+            keep.append(cn)
+            continue
+        cfile = cn.get("source_file") or ""
+        key = (cfile.replace("\\", "/").rsplit("/", 1)[-1], _norm_fn_name(cn.get("label") or ""))
+        cand = [
+            bn for bn in by_name.get(key, [])
+            if _path_suffix_match(cfile, bn.get("source_file") or "")
+        ]
+        if len(cand) == 1:
+            canon = cand[0]
+            id_map[cid] = canon["id"]
+            meta = canon.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            svc = (cn.get("metadata") or {}).get("service")
+            if svc and not meta.get("service"):
+                meta["service"] = svc
+            canon["metadata"] = meta
+            matched += 1
+        else:
+            id_map[cid] = cid            # 0 or >1 — keep as new, never guess
+            keep.append(cn)
+            if cand:
+                ambiguous += 1
+            else:
+                unmatched += 1
+
+    seen: set[tuple] = set()
+    edges_out: list[dict] = []
+    for e in c_edges:
+        e = dict(e)
+        e["source"] = id_map.get(e.get("source"), e.get("source"))
+        e["target"] = id_map.get(e.get("target"), e.get("target"))
+        k = (e.get("source"), e.get("target"), e.get("relation"))
+        if k in seen:
+            continue
+        seen.add(k)
+        edges_out.append(e)
+
+    return {
+        "nodes": keep,
+        "edges": edges_out,
+        "reconciliation": {
+            "contract_fn_nodes": sum(1 for n in c_nodes if n.get("kind") == "function"),
+            "matched": matched,
+            "kept_new": unmatched,
+            "ambiguous_kept_new": ambiguous,
+        },
+    }

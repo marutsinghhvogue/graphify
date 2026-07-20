@@ -228,6 +228,16 @@ def test_extract_cross_service_wires_calls_service_edges(monkeypatch, tmp_path):
     assert any(e.get("confidence") == "INFERRED" for e in calls_service), (
         "cross-service edges must carry the INFERRED confidence tier"
     )
+    # Reconciliation: endpoints must be repointed onto real AST nodes (not the
+    # svc_* island), so blast radius can traverse from a code node into them.
+    node_ids = {n["id"] for n in graph.get("nodes", [])}
+    for e in calls_service:
+        assert not e["source"].startswith("svc_") and not e["target"].startswith("svc_"), (
+            "reconcile_contract must repoint calls_service endpoints onto AST ids"
+        )
+        assert e["source"] in node_ids and e["target"] in node_ids, (
+            "reconciled edge endpoints must resolve to nodes present in the graph"
+        )
 
 
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
