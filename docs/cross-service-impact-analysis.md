@@ -1,10 +1,22 @@
 # Cross-service impact analysis — capability & limits
 
-**Status:** SPIKE. `graphify/contract_introspect.py` proves the linchpin
+**Status:** WIRED. `graphify/contract_introspect.py` proves the linchpin
 (consumer HTTP call → producer endpoint, across services and languages, without
-host resolution). It is a library function (`cross_service_graph`), **not yet
-wired to any CLI flag or the `extract` pipeline**. 8 tests, fixture-only
-(`tests/fixtures/xservice`). Introduced in commit `0144602`.
+host resolution). Now dispatched from the CLI: **`graphify extract --cross-service`**
+treats each immediate subdirectory as a service, runs `cross_service_graph`, and
+merges its `{nodes, edges}` into `graph.json` (edges tagged INFERRED/AMBIGUOUS,
+`source='contract'`), so they persist via `graphify export-pg --source contract`.
+Introduced as a spike in commit `0144602`; wired into the `extract` pipeline
+afterward. Tests: `tests/test_contract_introspect.py` (inference) +
+`tests/test_extract_cli.py::test_extract_cross_service_wires_calls_service_edges`
+(CLI wiring); fixtures under `tests/fixtures/xservice`.
+
+**Known limitation (next step):** the contract handler/endpoint nodes use their
+own `svc_*` id scheme, so they are a self-consistent subgraph but are **not yet
+reconciled with the tree-sitter AST function nodes** for the same handlers —
+analogous to the SCIP `reconcile_scip` merge. Until that lands, blast radius
+traversing from an AST function node won't automatically cross into the
+cross-service edges. Reconciliation-on-identity is the follow-up.
 
 ## The two questions this targets
 

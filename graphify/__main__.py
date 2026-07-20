@@ -2303,6 +2303,9 @@ def main() -> None:
         print("                            maps tables, views, functions + FK relationships;")
         print("                            column-level detail is not represented in the graph")
         print("    --cargo                 extract crate→crate deps from Cargo.toml")
+        print("    --cross-service         infer cross-service edges: each subdir is a service,")
+        print("                            match consumer HTTP calls to producer endpoints")
+        print("                            (FastAPI/NestJS/Spring); edges tagged INFERRED/AMBIGUOUS")
         print("    --global                also merge the resulting graph into the global graph")
         print("    --as <tag>              repo tag for --global (default: target directory name)")
         print("  global add <graph.json>  add/update a project graph in the global graph (~/.graphify/global-graph.json)")
@@ -4386,7 +4389,7 @@ def main() -> None:
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo]",
+                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4407,6 +4410,7 @@ def main() -> None:
         out_dir: Path | None = None
         cli_postgres_dsn: str | None = None
         cli_cargo: bool = False
+        cli_cross_service: bool = False
         no_cluster = False
         dedup_llm = False
         google_workspace = False
@@ -4508,6 +4512,9 @@ def main() -> None:
                 cli_postgres_dsn = a.split("=", 1)[1]; i += 1
             elif a == "--cargo":
                 cli_cargo = True
+                i += 1
+            elif a == "--cross-service":
+                cli_cross_service = True
                 i += 1
             else:
                 i += 1
@@ -4837,13 +4844,34 @@ def main() -> None:
             print(f"[graphify extract] Cargo: {len(cargo_result['nodes'])} nodes, "
                   f"{len(cargo_result['edges'])} edges")
 
-        # Merge AST + semantic + pg_result + cargo_result. Order matters for deduplication: passing AST
+        # Cross-service edges: treat each immediate subdirectory of the target as
+        # a service and match consumer HTTP calls to producer endpoints by
+        # (method, normalized-path) — the edges the compiler/tree-sitter can't
+        # see across a service boundary. Edges are tagged INFERRED/AMBIGUOUS with
+        # source='contract' so they export cleanly and blast radius keeps them.
+        xsvc_result: dict = {"nodes": [], "edges": []}
+        if cli_cross_service:
+            from graphify.contract_introspect import cross_service_graph
+            print("[graphify extract] inferring cross-service edges...")
+            try:
+                xsvc_result = cross_service_graph(target)
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            _xs = xsvc_result.get("stats", {})
+            print(f"[graphify extract] cross-service: {len(xsvc_result['nodes'])} nodes, "
+                  f"{len(xsvc_result['edges'])} edges "
+                  f"({_xs.get('matched_unique', 0)} matched, "
+                  f"{_xs.get('matched_ambiguous', 0)} ambiguous, "
+                  f"{_xs.get('external', 0)} external)")
+
+        # Merge AST + semantic + pg_result + cargo_result + xsvc_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the
         # semantic side.
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),

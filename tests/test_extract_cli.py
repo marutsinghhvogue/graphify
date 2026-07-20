@@ -172,6 +172,64 @@ def test_extract_codeonly_succeeds_without_api_key(monkeypatch, tmp_path):
     assert len(json.loads(graph.read_text()).get("nodes", [])) > 0
 
 
+def _two_service_corpus(tmp_path):
+    """A monorepo-of-services corpus: a NestJS consumer calling a FastAPI
+    producer's endpoint by (method, path) across the service boundary."""
+    user = tmp_path / "user_service"
+    user.mkdir()
+    (user / "main.py").write_text(
+        "@app.get('/users/{id}')\n"
+        "def get_user(id):\n    return {'id': id}\n"
+    )
+    order = tmp_path / "order_service"
+    order.mkdir()
+    (order / "orders.controller.ts").write_text(
+        "@Controller('orders')\n"
+        "export class OrdersController {\n"
+        "  async getOrder(id) {\n"
+        "    const u = await fetch(`http://user_service/users/${id}`);\n"
+        "    return u;\n"
+        "  }\n"
+        "}\n"
+    )
+    return tmp_path
+
+
+def test_extract_cross_service_wires_calls_service_edges(monkeypatch, tmp_path):
+    """`extract --cross-service` must run contract inference and merge its
+    cross-service edges into graph.json.
+
+    Wiring regression: contract_introspect was a library-only spike until it was
+    dispatched from the extract CLI (each subdir = a service). This locks in that
+    a consumer HTTP call resolves to the producer handler as a `calls_service`
+    edge, tagged INFERRED with source-provenance intact.
+    """
+    import json
+
+    corpus = _two_service_corpus(tmp_path)
+    out_dir = tmp_path / "out"
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys, "argv",
+        ["graphify", "extract", str(corpus), "--cross-service",
+         "--no-cluster", "--out", str(out_dir)],
+    )
+
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0), f"unexpected exit code {exc.code}"
+
+    graph = json.loads((out_dir / "graphify-out" / "graph.json").read_text())
+    edges = graph.get("edges", graph.get("links", []))
+    calls_service = [e for e in edges if e.get("relation") == "calls_service"]
+    assert calls_service, "expected a cross-service calls_service edge in the graph"
+    assert any(e.get("confidence") == "INFERRED" for e in calls_service), (
+        "cross-service edges must carry the INFERRED confidence tier"
+    )
+
+
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     """`extract --out DIR` routes every artifact to DIR/graphify-out/ and the
     scanned project must not grow a graphify-out/ (or anything else) beside
