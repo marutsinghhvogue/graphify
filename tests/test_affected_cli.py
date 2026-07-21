@@ -124,6 +124,30 @@ def test_affected_cli_loads_edges_keyed_graph(monkeypatch, tmp_path, capsys):
     assert "calls" in out
 
 
+def test_affected_traverses_cross_service_and_captures_confidence():
+    """Blast radius must cross the service boundary via 'calls_service' and record
+    the connecting edge's confidence, so recall consumers reach other-service
+    callers and precision consumers can still filter to EXTRACTED."""
+    from graphify.affected import DEFAULT_AFFECTED_RELATIONS, affected_nodes
+
+    assert "calls_service" in DEFAULT_AFFECTED_RELATIONS
+    assert "triggers" in DEFAULT_AFFECTED_RELATIONS
+
+    graph = nx.DiGraph()
+    graph.add_node("handler", label="get_user()", source_file="user/main.py")
+    graph.add_node("consumer", label="getOrder()", source_file="order/ctl.ts")
+    # consumer in another service calls the handler over HTTP (INFERRED tier)
+    graph.add_edge("consumer", "handler", relation="calls_service",
+                   confidence="INFERRED", confidence_score=0.9)
+
+    hits = affected_nodes(graph, "handler", relations=DEFAULT_AFFECTED_RELATIONS, depth=2)
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit.node_id == "consumer"
+    assert hit.via_relation == "calls_service"
+    assert hit.confidence == "INFERRED"
+
+
 def test_resolve_seed_bare_name_matches_callable_label():
     from graphify.affected import resolve_seed
 

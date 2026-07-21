@@ -12,6 +12,7 @@ from graphify.serve import (
     _dfs,
     _filter_graph_by_context,
     _find_node,
+    _format_blast_radius,
     _format_call_edges,
     _get_trigram_index,
     _infer_context_filters,
@@ -741,3 +742,47 @@ def test_find_callees_none():
 def test_find_call_edges_unknown_node():
     G = _make_call_graph()
     assert "No node matching 'zzz' found." in _format_call_edges(G, "zzz", incoming=True)
+
+
+# --- _format_blast_radius (blast_radius tool) ---
+
+def _make_blast_graph() -> nx.DiGraph:
+    """handler <-calls_service- consumer(other service); handler <-calls- local."""
+    G = nx.DiGraph()
+    G.add_node("handler", label="get_user()", source_file="user/main.py",
+               source_location="L8", metadata={"service": "user_service"})
+    G.add_node("consumer", label="getOrder()", source_file="order/ctl.ts",
+               source_location="L9", metadata={"service": "order_service"})
+    G.add_node("local", label="local_helper()", source_file="user/util.py",
+               source_location="L3")
+    G.add_edge("consumer", "handler", relation="calls_service",
+               confidence="INFERRED", confidence_score=0.9)
+    G.add_edge("local", "handler", relation="calls", confidence="EXTRACTED")
+    return G
+
+
+def test_blast_radius_crosses_service_boundary_and_tiers():
+    G = _make_blast_graph()
+    out = _format_blast_radius(G, "get_user", depth=2)
+    assert "Blast radius of get_user" in out
+    # both the local caller and the cross-service consumer are reached
+    assert "local_helper()" in out and "getOrder()" in out
+    # cross-service hit is annotated with service + relation + INFERRED tier
+    assert "{order_service}" in out
+    assert "[calls_service]" in out and "[INFERRED]" in out
+    assert "[calls]" in out and "[EXTRACTED]" in out
+    # confidence-tier summary + cross-boundary count in the footer
+    assert "tiers:" in out
+    assert "cross-service/scheduled hits: 1" in out
+
+
+def test_blast_radius_unknown_seed():
+    G = _make_blast_graph()
+    assert "No unique node match" in _format_blast_radius(G, "zzz")
+
+
+def test_blast_radius_no_affected_nodes():
+    G = _make_blast_graph()
+    # a leaf with nothing depending on it
+    out = _format_blast_radius(G, "local_helper", depth=2)
+    assert "no affected nodes" in out

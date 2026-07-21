@@ -643,6 +643,53 @@ def _format_call_edges(G: nx.Graph, label: str, *, incoming: bool) -> str:
     return "\n".join([header, *rows])
 
 
+def _format_blast_radius(G: nx.Graph, seed_query: str, *, depth: int = 2) -> str:
+    """Render the blast radius of ``seed_query``: every node reachable by reverse
+    dependency edges (who is impacted by changing the seed), depth-bounded.
+
+    Reuses ``affected.py`` (which includes the cross-service ``calls_service`` and
+    scheduler ``triggers`` relations), tags each hit with its confidence tier
+    (recall-first: INFERRED/AMBIGUOUS kept), and flags service + cross-boundary
+    hits. Module-level so it is unit-testable without the MCP transport.
+    """
+    from graphify.affected import (
+        DEFAULT_AFFECTED_RELATIONS,
+        affected_nodes,
+        resolve_seed,
+    )
+    seed = resolve_seed(G, seed_query)
+    if seed is None:
+        return f"No unique node match for '{seed_query}'."
+    hits = affected_nodes(G, seed, relations=DEFAULT_AFFECTED_RELATIONS, depth=depth)
+    seed_label = sanitize_label(G.nodes[seed].get("label", seed))
+    if not hits:
+        return f"Blast radius of {seed_label} (depth {depth}): no affected nodes."
+
+    tiers: dict[str, int] = {}
+    cross_boundary = 0
+    lines = [f"Blast radius of {seed_label} (depth {depth}) — {len(hits)} affected node(s):"]
+    for h in sorted(hits, key=lambda x: (x.depth, x.node_id)):
+        d = G.nodes[h.node_id]
+        conf = h.confidence or "EXTRACTED"
+        tiers[conf] = tiers.get(conf, 0) + 1
+        svc = (d.get("metadata") or {}).get("service")
+        svc_tag = f" {{{sanitize_label(str(svc))}}}" if svc else ""
+        if h.via_relation in ("calls_service", "triggers"):
+            cross_boundary += 1
+        src = d.get("source_file") or "-"
+        loc = f"{src}:{d.get('source_location')}" if d.get("source_location") else str(src)
+        lines.append(
+            f"  d{h.depth} {sanitize_label(d.get('label', h.node_id))}{svc_tag} "
+            f"[{sanitize_label(str(h.via_relation))}] [{sanitize_label(conf)}] "
+            f"{sanitize_label(str(loc))}"
+        )
+    footer = "tiers: " + ", ".join(f"{k}={v}" for k, v in sorted(tiers.items()))
+    if cross_boundary:
+        footer += f"; cross-service/scheduled hits: {cross_boundary}"
+    lines.append(footer)
+    return "\n".join(lines)
+
+
 def _filter_blank_stdin() -> None:
     """Filter blank lines from stdin before MCP reads it.
 
@@ -838,6 +885,26 @@ def _build_server(graph_path: str):
                         "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"},
                     },
                     "required": ["source", "target"],
+                },
+            ),
+            types.Tool(
+                name="blast_radius",
+                description=(
+                    "Compute the BLAST RADIUS of a symbol: every node that could be affected "
+                    "by changing it, via reverse reachability over dependency edges — calls, "
+                    "references, imports, implements, and the cross-service 'calls_service' / "
+                    "scheduler 'triggers' edges. Depth-bounded; recall-first (keeps INFERRED and "
+                    "AMBIGUOUS edges) and tags each hit with its confidence tier so you can "
+                    "filter to EXTRACTED for precision. Use before changing a symbol to see which "
+                    "functions AND services it impacts — including callers in other services."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string", "description": "Symbol label or node ID to analyze"},
+                        "depth": {"type": "integer", "default": 2, "description": "Max reverse-reachability hops (default 2)"},
+                    },
+                    "required": ["label"],
                 },
             ),
             types.Tool(
@@ -1058,6 +1125,11 @@ def _build_server(graph_path: str):
         prefix = ("\n".join(warnings) + "\n") if warnings else ""
         return prefix + f"Shortest path ({hops} hops):\n  " + " ".join(segments)
 
+    def _tool_blast_radius(arguments: dict) -> str:
+        return _format_blast_radius(
+            G, arguments["label"], depth=int(arguments.get("depth", 2))
+        )
+
     def _tool_list_prs(arguments: dict) -> str:
         from graphify.prs import _detect_default_branch, fetch_prs, fetch_worktrees, format_prs_text
         repo = arguments.get("repo") or None
@@ -1161,6 +1233,7 @@ def _build_server(graph_path: str):
         "god_nodes": _tool_god_nodes,
         "graph_stats": _tool_graph_stats,
         "shortest_path": _tool_shortest_path,
+        "blast_radius": _tool_blast_radius,
         "list_prs": _tool_list_prs,
         "get_pr_impact": _tool_get_pr_impact,
         "triage_prs": _tool_triage_prs,

@@ -20,6 +20,11 @@ DEFAULT_AFFECTED_RELATIONS = (
     "uses",
     "mixes_in",
     "embeds",
+    # cross-service + scheduled entry points: the edges the compiler/tree-sitter
+    # can't see across a service boundary, so blast radius reaches other services
+    # and timed triggers, not just in-process callers.
+    "calls_service",
+    "triggers",
 )
 
 
@@ -28,6 +33,7 @@ class AffectedHit:
     node_id: str
     depth: int
     via_relation: str
+    confidence: str = ""
 
 
 def _node_label(graph: nx.Graph, node_id: str) -> str:
@@ -124,7 +130,10 @@ def affected_nodes(
             if source in seen:
                 continue
             seen.add(source)
-            hit = AffectedHit(source, current_depth + 1, relation)
+            hit = AffectedHit(
+                source, current_depth + 1, relation,
+                str(data.get("confidence", "")),
+            )
             hits.append(hit)
             queue.append((source, current_depth + 1))
 
