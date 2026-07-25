@@ -240,6 +240,47 @@ def test_extract_cross_service_wires_calls_service_edges(monkeypatch, tmp_path):
         )
 
 
+def test_extract_schedulers_wires_triggers_edges(monkeypatch, tmp_path):
+    """`extract --schedulers` must detect in-code schedulers and merge 'triggers'
+    edges (schedule → handler) reconciled onto the AST handler node, so blast
+    radius reaches 'what runs this on a timer'."""
+    import json
+
+    svc = tmp_path / "billing"
+    svc.mkdir()
+    (svc / "jobs.py").write_text(
+        "@scheduler.scheduled_job('cron', hour=2)\n"
+        "def rollup_daily():\n    return do_rollup()\n\n"
+        "def do_rollup():\n    return 1\n"
+    )
+    out_dir = tmp_path / "out"
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys, "argv",
+        ["graphify", "extract", str(tmp_path), "--schedulers",
+         "--no-cluster", "--out", str(out_dir)],
+    )
+
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0), f"unexpected exit code {exc.code}"
+
+    graph = json.loads((out_dir / "graphify-out" / "graph.json").read_text())
+    node_ids = {n["id"] for n in graph.get("nodes", [])}
+    triggers = [e for e in graph.get("edges", graph.get("links", []))
+                if e.get("relation") == "triggers"]
+    assert triggers, "expected a 'triggers' edge from a schedule to its handler"
+    assert all(e.get("confidence") == "EXTRACTED" for e in triggers)
+    # reconciled onto the AST handler node (not a svc_* island) and it resolves
+    for e in triggers:
+        assert not e["target"].startswith("svc_"), (
+            "triggers target must be reconciled onto an AST node id"
+        )
+        assert e["target"] in node_ids
+
+
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     """`extract --out DIR` routes every artifact to DIR/graphify-out/ and the
     scanned project must not grow a graphify-out/ (or anything else) beside

@@ -4,11 +4,23 @@ subtitle: "Finding timed & event-driven entry points across app frameworks and c
 date: "July 2026"
 ---
 
+# Status
+
+**Tier A (in-code) is IMPLEMENTED** — `graphify/schedule_introspect.py`
+(`schedule_graph`), wired as `graphify extract --schedulers`. It detects
+decorator/annotation-bound schedulers (Spring `@Scheduled`, NestJS
+`@Cron`/`@Interval`/`@Timeout`, APScheduler `@scheduled_job`, Celery
+`@periodic_task`), emits `schedule` nodes + EXTRACTED `triggers` edges, and
+reconciles handler nodes onto the tree-sitter AST via `reconcile_contract` so
+`blast_radius` traverses them (`triggers` is in `DEFAULT_AFFECTED_RELATIONS`).
+Fixtures: `tests/fixtures/schedulers/`. **Tier B (cloud/IaC) remains designed,
+not built** — see below.
+
 # TL;DR
 
-Graphify has **no first-class notion of a scheduler**. A cron'd task shows up
+Graphify had **no first-class notion of a scheduler**. A cron'd task showed up
 only as an ordinary function node — the *fact that something fires it on a
-timer* is invisible, so blast radius misses it. This doc designs a
+timer* was invisible, so blast radius missed it. This doc designs a
 `schedule_introspect.py` module (sibling to `contract_introspect.py` /
 `pg_introspect.py`) that discovers **schedule triggers** and links each to the
 **handler it invokes**, tagged with confidence.

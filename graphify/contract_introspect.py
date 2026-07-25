@@ -337,8 +337,11 @@ def _path_suffix_match(a: str, b: str) -> bool:
 
 
 def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
-    """Merge contract cross-service nodes/edges onto the tree-sitter (``base``)
-    graph on ``(path-suffix, function-name)`` identity.
+    """Merge an introspector's emitted nodes/edges onto the tree-sitter (``base``)
+    graph on ``(path-suffix, function-name)`` identity. Generic over the emitter —
+    used for cross-service contract handlers and for scheduler handlers
+    (``schedule_introspect``); any ``kind='function'`` node is a fold candidate,
+    any other node kind (``route``, ``schedule``) is kept as new.
 
     Each contract *function* node (``kind='function'``) that lands on exactly one
     base AST node is folded into it: the AST node stays canonical and is stamped

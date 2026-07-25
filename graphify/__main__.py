@@ -2306,6 +2306,8 @@ def main() -> None:
         print("    --cross-service         infer cross-service edges: each subdir is a service,")
         print("                            match consumer HTTP calls to producer endpoints")
         print("                            (FastAPI/NestJS/Spring); edges tagged INFERRED/AMBIGUOUS")
+        print("    --schedulers            detect in-code schedulers (@Scheduled/@Cron/scheduled_job/")
+        print("                            periodic_task) → schedule nodes + 'triggers' edges to handlers")
         print("    --global                also merge the resulting graph into the global graph")
         print("    --as <tag>              repo tag for --global (default: target directory name)")
         print("  global add <graph.json>  add/update a project graph in the global graph (~/.graphify/global-graph.json)")
@@ -4389,7 +4391,7 @@ def main() -> None:
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service]",
+                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4411,6 +4413,7 @@ def main() -> None:
         cli_postgres_dsn: str | None = None
         cli_cargo: bool = False
         cli_cross_service: bool = False
+        cli_schedulers: bool = False
         no_cluster = False
         dedup_llm = False
         google_workspace = False
@@ -4515,6 +4518,9 @@ def main() -> None:
                 i += 1
             elif a == "--cross-service":
                 cli_cross_service = True
+                i += 1
+            elif a == "--schedulers":
+                cli_schedulers = True
                 i += 1
             else:
                 i += 1
@@ -4873,13 +4879,37 @@ def main() -> None:
                   f"reconciled {_rec.get('matched', 0)}/{_rec.get('contract_fn_nodes', 0)} "
                   f"handlers onto AST nodes")
 
-        # Merge AST + semantic + pg_result + cargo_result + xsvc_result. Order matters for deduplication: passing AST
+        # Scheduler edges (Tier A, in-code): decorator/annotation-bound timed
+        # entry points (@Scheduled / @Cron / @scheduled_job / @periodic_task) →
+        # a `schedule` node + a `triggers` edge to the handler (EXTRACTED).
+        # Reconciled onto AST nodes like cross-service, so blast radius reaches
+        # "what runs this on a timer".
+        sched_result: dict = {"nodes": [], "edges": []}
+        if cli_schedulers:
+            from graphify.contract_introspect import reconcile_contract
+            from graphify.schedule_introspect import schedule_graph
+            print("[graphify extract] detecting in-code schedulers...")
+            try:
+                sched_raw = schedule_graph(target)
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            sched_result = reconcile_contract(ast_result, sched_raw)
+            _sc = sched_raw.get("stats", {})
+            _srec = sched_result.get("reconciliation", {})
+            _by = ", ".join(f"{k}={v}" for k, v in sorted(_sc.get("by_provider", {}).items()))
+            print(f"[graphify extract] schedulers: {_sc.get('schedules', 0)} found"
+                  + (f" ({_by})" if _by else "")
+                  + f"; reconciled {_srec.get('matched', 0)}/{_srec.get('contract_fn_nodes', 0)} "
+                  f"handlers onto AST nodes")
+
+        # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the
         # semantic side.
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),
