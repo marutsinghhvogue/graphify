@@ -690,6 +690,32 @@ def _format_blast_radius(G: nx.Graph, seed_query: str, *, depth: int = 2) -> str
     return "\n".join(lines)
 
 
+def _format_discover_seeds(G: nx.Graph, query: str, *, top_n: int = 10) -> str:
+    """Stage 2: rank the code symbols a prose requirement most likely touches.
+
+    BM25 lexical retrieval (offline, deterministic) over per-symbol chunks with
+    identifier splitting, so ``clean up stale orders`` reaches ``purgeStaleOrders``.
+    Module-level so it is unit-testable without the MCP transport."""
+    from graphify.semantic_index import chunk_nodes, retrieve_seeds
+
+    nodes = [
+        {"id": n, "label": d.get("label", n), "kind": d.get("kind"),
+         "source_file": d.get("source_file"), "metadata": d.get("metadata")}
+        for n, d in G.nodes(data=True)
+    ]
+    hits = retrieve_seeds(query, chunk_nodes(nodes), top_n=top_n)
+    if not hits:
+        return f"No seed symbols found for: {sanitize_label(query)}"
+    lines = [f'Seed symbols for "{sanitize_label(query)}" (top {len(hits)}):']
+    for h in hits:
+        kind = f" ({sanitize_label(h.kind)})" if h.kind else ""
+        loc = sanitize_label(str(h.path)) if h.path else "-"
+        lines.append(
+            f"  {h.score:.4f} [{h.matched}] {sanitize_label(h.name)}{kind}  {loc}"
+        )
+    return "\n".join(lines)
+
+
 def _filter_blank_stdin() -> None:
     """Filter blank lines from stdin before MCP reads it.
 
@@ -905,6 +931,24 @@ def _build_server(graph_path: str):
                         "depth": {"type": "integer", "default": 2, "description": "Max reverse-reachability hops (default 2)"},
                     },
                     "required": ["label"],
+                },
+            ),
+            types.Tool(
+                name="discover_seeds",
+                description=(
+                    "STAGE 2 of PRD→plan: given a requirement in prose, return the code symbols "
+                    "it most likely touches (ranked seeds), to feed into blast_radius. BM25 "
+                    "retrieval over symbol names (split into subtokens, so 'clean up stale orders' "
+                    "matches purgeStaleOrders), paths, kinds, and doc text. Use this to turn a "
+                    "feature description into starting points before computing impact."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The requirement / feature description in prose"},
+                        "top_n": {"type": "integer", "default": 10, "description": "How many seed symbols to return"},
+                    },
+                    "required": ["query"],
                 },
             ),
             types.Tool(
@@ -1130,6 +1174,11 @@ def _build_server(graph_path: str):
             G, arguments["label"], depth=int(arguments.get("depth", 2))
         )
 
+    def _tool_discover_seeds(arguments: dict) -> str:
+        return _format_discover_seeds(
+            G, arguments["query"], top_n=int(arguments.get("top_n", 10))
+        )
+
     def _tool_list_prs(arguments: dict) -> str:
         from graphify.prs import _detect_default_branch, fetch_prs, fetch_worktrees, format_prs_text
         repo = arguments.get("repo") or None
@@ -1234,6 +1283,7 @@ def _build_server(graph_path: str):
         "graph_stats": _tool_graph_stats,
         "shortest_path": _tool_shortest_path,
         "blast_radius": _tool_blast_radius,
+        "discover_seeds": _tool_discover_seeds,
         "list_prs": _tool_list_prs,
         "get_pr_impact": _tool_get_pr_impact,
         "triage_prs": _tool_triage_prs,

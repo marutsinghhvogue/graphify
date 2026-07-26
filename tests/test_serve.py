@@ -14,6 +14,7 @@ from graphify.serve import (
     _find_node,
     _format_blast_radius,
     _format_call_edges,
+    _format_discover_seeds,
     _get_trigram_index,
     _infer_context_filters,
     _load_graph,
@@ -786,3 +787,23 @@ def test_blast_radius_no_affected_nodes():
     # a leaf with nothing depending on it
     out = _format_blast_radius(G, "local_helper", depth=2)
     assert "no affected nodes" in out
+
+
+# --- _format_discover_seeds (discover_seeds tool) ---
+
+def test_discover_seeds_ranks_symbols_from_prose():
+    G = nx.DiGraph()
+    G.add_node("pay", label="PaymentController", kind="class", source_file="checkout/pay.py")
+    G.add_node("auth", label="AuthService", kind="class", source_file="auth/svc.py")
+    out = _format_discover_seeds(G, "payment checkout", top_n=3)
+    assert "Seed symbols for" in out
+    # the payment symbol is surfaced; the unrelated one is not top of the list
+    assert "PaymentController" in out
+    lines = out.splitlines()[1:]
+    assert lines and "PaymentController" in lines[0]
+
+
+def test_discover_seeds_no_match():
+    G = nx.DiGraph()
+    G.add_node("a", label="Alpha", source_file="a.py")
+    assert "No seed symbols found" in _format_discover_seeds(G, "zzznomatchhere")

@@ -2216,6 +2216,8 @@ def main() -> None:
         print("    --graph <path>          base graph.json (default graphify-out/graph.json)")
         print("    --out <path>            output path (default: overwrite --graph)")
         print("    --force                 allow overwrite even if node count drops")
+        print("  seeds \"<text>\" [graph]  Stage 2: prose requirement -> ranked code symbols it touches")
+        print("                          (BM25 over names/paths/docs); feed the seeds into blast_radius")
         print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
         print("                          no rule yet (schedulers/events); --write persists them to")
         print("                          .graphify_binding_rules.json for deterministic --bindings runs")
@@ -3179,6 +3181,31 @@ def main() -> None:
                   f"Run `graphify extract --bindings` to use them.")
         else:
             print("\n(dry run) re-run with --write to persist these rules.")
+    elif cmd == "seeds":
+        # graphify seeds "requirement text" [graph.json] [--top N]
+        # Stage 2: prose → the code symbols it likely touches (ranked seeds).
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify seeds")
+        p.add_argument("query")
+        p.add_argument("graph", nargs="?", default=None)
+        p.add_argument("--top", type=int, default=10)
+        ns = p.parse_args(sys.argv[2:])
+        gp = Path(ns.graph).resolve() if ns.graph else _default_graph_path()
+        gp = Path(gp)
+        if not gp.exists():
+            print(f"error: graph file not found: {gp} (run `graphify extract` first)", file=sys.stderr)
+            sys.exit(1)
+        raw = json.loads(gp.read_text(encoding="utf-8"))
+        from graphify.semantic_index import chunk_extraction, retrieve_seeds
+        hits = retrieve_seeds(ns.query, chunk_extraction(raw), top_n=ns.top)
+        if not hits:
+            print(f"No seed symbols found for: {ns.query}")
+        else:
+            print(f'Seed symbols for "{ns.query}" (top {len(hits)}):')
+            for h in hits:
+                kind = f" ({h.kind})" if h.kind else ""
+                print(f"  {h.score:.4f} [{h.matched}] {h.name}{kind}  {h.path}")
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]
