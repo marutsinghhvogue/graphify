@@ -27,6 +27,9 @@ DEFAULT_AFFECTED_RELATIONS = (
     "calls_service",
     "triggers",
     "consumes",
+    # dependency injection: changing an injected type affects the classes that
+    # depend on it (name-resolved, INFERRED tier).
+    "injects",
 )
 
 

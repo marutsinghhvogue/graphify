@@ -53,8 +53,22 @@ _LANG_BY_SUFFIX = {".py": "python", ".java": "java", ".ts": "ts", ".tsx": "ts"}
 _PAREN = re.compile(r"\(([^)]*)\)")
 
 VALID_LANGS = frozenset(_DEFS)
-VALID_RESOLUTIONS = frozenset({"next_def"})
+VALID_RESOLUTIONS = frozenset({"next_def", "inject"})
 VALID_CONFIDENCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
+
+# Enclosing type declaration, for the 'inject' resolution (DI: the annotated
+# member belongs to a class, and the edge runs from that class to the injected
+# type).
+_CLASS_DECL = {
+    "java": re.compile(r"^\s*(?:public\s+|abstract\s+|final\s+|static\s+)*(?:class|interface|enum)\s+(\w+)"),
+    "ts": re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)"),
+    "python": re.compile(r"^\s*class\s+(\w+)"),
+}
+# The injected type on a Java field/setter injection: capture the Capitalized
+# type token of the declaration on (or just below) the annotation.
+_JAVA_FIELD_TYPE = re.compile(
+    r"(?:private|public|protected)?\s*(?:final\s+)?([A-Z]\w+)(?:<[^>]*>)?\s+\w+\s*[;=(]"
+)
 
 EXTERNAL_RULES_FILENAME = ".graphify_binding_rules.json"
 
@@ -71,6 +85,31 @@ def next_def_after(lines: list[str], start: int, lang: str) -> tuple[str | None,
         if m and m.group(1) not in _NON_FN:
             return m.group(1), j
     return None, None
+
+
+def enclosing_class(lines: list[str], idx: int, lang: str) -> tuple[str | None, int | None]:
+    """Name + line index of the nearest class/interface/enum declaration at or
+    above ``idx`` — the owner of an injected member."""
+    pat = _CLASS_DECL.get(lang)
+    if pat is None:
+        return None, None
+    for j in range(idx, -1, -1):
+        m = pat.match(lines[j])
+        if m:
+            return m.group(1), j
+    return None, None
+
+
+def injected_type(lines: list[str], idx: int, lang: str) -> str | None:
+    """The injected type of a Java field/setter injection — the Capitalized type
+    token on the annotation line or the next couple of lines."""
+    if lang != "java":
+        return None
+    for j in range(idx, min(idx + 3, len(lines))):
+        m = _JAVA_FIELD_TYPE.search(lines[j])
+        if m:
+            return m.group(1)
+    return None
 
 
 def paren_content(line: str) -> str:
@@ -216,6 +255,20 @@ BUILTIN_RULES: tuple[BindingRule, ...] = (
     BindingRule("event.nestjs.messagepattern", "event", "nestjs", ("ts",),
                 r"^\s*@MessagePattern\b", "consumes", "event",
                 description="NestJS @MessagePattern"),
+    # dependency injection → 'injects' (class → injected type). Name-resolved →
+    # INFERRED; SCIP upgrades the target to a type-exact node when available.
+    BindingRule("di.spring.autowired", "di", "spring", ("java",),
+                r"^\s*@Autowired\b", "injects", "class",
+                resolution="inject", confidence="INFERRED",
+                description="Spring @Autowired field/setter injection"),
+    BindingRule("di.jsr330.inject", "di", "jsr330", ("java",),
+                r"^\s*@Inject\b", "injects", "class",
+                resolution="inject", confidence="INFERRED",
+                description="JSR-330 @Inject field injection"),
+    BindingRule("di.jakarta.resource", "di", "jakarta", ("java",),
+                r"^\s*@Resource\b", "injects", "class",
+                resolution="inject", confidence="INFERRED",
+                description="Jakarta @Resource injection"),
 )
 
 
@@ -323,38 +376,78 @@ def run_bindings(
             for r in by_lang[lang]:
                 if not r.regex.search(line):
                     continue
-                handler, dline = next_def_after(lines, i, lang)
-                if handler is None or dline is None:
+                if r.resolution == "inject":
+                    emitted = _emit_inject(r, lines, i, f, service, nodes, edges)
+                else:
+                    emitted = _emit_next_def(r, lines, i, f, service, nodes, edges)
+                if not emitted:
                     continue
-                expr = paren_content(line)
-                meta: dict[str, Any] = {"provider": r.provider, "category": r.category,
-                                        "expr": expr, "service": service, "rule": r.id}
-                meta.update(r.extra_meta)
-                if r.category == "scheduler" and "trigger" not in meta:
-                    meta["trigger"] = _derive_trigger(r.provider, expr)
-                sid = f"{r.node_kind}_{_sanitize_id(service)}_{_sanitize_id(handler)}_l{i + 1}"
-                hid = _fn_id(service, handler)
-                nodes[sid] = {
-                    "id": sid, "label": expr or f"{r.provider}:{r.node_kind}",
-                    "file_type": "code", "kind": r.node_kind,
-                    "source_file": str(f), "source_location": f"L{i + 1}",
-                    "metadata": meta,
-                }
-                nodes.setdefault(hid, {
-                    "id": hid, "label": f"{handler}()", "file_type": "code",
-                    "kind": "function", "source_file": str(f),
-                    "source_location": f"L{dline + 1}", "metadata": {"service": service},
-                })
-                edges.append({
-                    "source": sid, "target": hid, "relation": r.relation,
-                    "confidence": r.confidence,
-                    "confidence_score": 1.0 if r.confidence == "EXTRACTED" else 0.7,
-                    "source_file": str(f), "source_location": f"L{i + 1}",
-                    "context": r.category,
-                    "metadata": {"provider": r.provider, "expr": expr, "rule": r.id},
-                })
                 stats["bindings"] += 1
                 stats["by_category"][r.category] = stats["by_category"].get(r.category, 0) + 1
                 stats["by_provider"][r.provider] = stats["by_provider"].get(r.provider, 0) + 1
 
     return {"nodes": list(nodes.values()), "edges": edges, "stats": stats}
+
+
+def _confidence_score(confidence: str) -> float:
+    return 1.0 if confidence == "EXTRACTED" else 0.7
+
+
+def _emit_next_def(r, lines, i, f, service, nodes, edges) -> bool:
+    """Construct annotates the def below it (schedulers, event listeners): a
+    synthetic construct node + an edge to that handler."""
+    lang = detect_lang(f)
+    handler, dline = next_def_after(lines, i, lang)
+    if handler is None or dline is None:
+        return False
+    expr = paren_content(lines[i])
+    meta: dict[str, Any] = {"provider": r.provider, "category": r.category,
+                            "expr": expr, "service": service, "rule": r.id}
+    meta.update(r.extra_meta)
+    if r.category == "scheduler" and "trigger" not in meta:
+        meta["trigger"] = _derive_trigger(r.provider, expr)
+    sid = f"{r.node_kind}_{_sanitize_id(service)}_{_sanitize_id(handler)}_l{i + 1}"
+    hid = _fn_id(service, handler)
+    nodes[sid] = {
+        "id": sid, "label": expr or f"{r.provider}:{r.node_kind}",
+        "file_type": "code", "kind": r.node_kind,
+        "source_file": str(f), "source_location": f"L{i + 1}",
+        "metadata": meta,
+    }
+    nodes.setdefault(hid, {
+        "id": hid, "label": f"{handler}()", "file_type": "code",
+        "kind": "function", "source_file": str(f),
+        "source_location": f"L{dline + 1}", "metadata": {"service": service},
+    })
+    edges.append({
+        "source": sid, "target": hid, "relation": r.relation,
+        "confidence": r.confidence, "confidence_score": _confidence_score(r.confidence),
+        "source_file": str(f), "source_location": f"L{i + 1}",
+        "context": r.category, "metadata": {"provider": r.provider, "expr": expr, "rule": r.id},
+    })
+    return True
+
+
+def _emit_inject(r, lines, i, f, service, nodes, edges) -> bool:
+    """Dependency injection: the annotated member's enclosing class depends on the
+    injected type. Emits the class node (folds onto AST) + an 'injects' edge whose
+    raw type-name target ``reconcile_contract`` resolves to the type's node."""
+    lang = detect_lang(f)
+    cls_name, cls_line = enclosing_class(lines, i, lang)
+    inj_type = injected_type(lines, i, lang)
+    if not cls_name or not inj_type:
+        return False
+    cid = f"svc_{_sanitize_id(service)}_cls_{_sanitize_id(cls_name)}"
+    nodes.setdefault(cid, {
+        "id": cid, "label": cls_name, "file_type": "code", "kind": "class",
+        "source_file": str(f), "source_location": f"L{(cls_line or i) + 1}",
+        "metadata": {"service": service},
+    })
+    edges.append({
+        "source": cid, "target": inj_type, "relation": r.relation,
+        "confidence": r.confidence, "confidence_score": _confidence_score(r.confidence),
+        "source_file": str(f), "source_location": f"L{i + 1}",
+        "context": r.category,
+        "metadata": {"provider": r.provider, "injected_type": inj_type, "rule": r.id},
+    })
+    return True

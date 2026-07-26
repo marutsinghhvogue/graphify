@@ -153,3 +153,65 @@ def test_event_handlers_reconcile_onto_ast_nodes(tmp_path):
     assert consumes and consumes[0]["target"] == "ast_on_order"
     # the topic node has no AST twin → kept as new
     assert any(n.get("kind") == "topic" for n in out["nodes"])
+
+
+# --- dependency injection (the 'inject' resolution mode) ---
+
+def test_di_emits_class_to_type_inject_edge(tmp_path):
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    _write(svc, "OrderService.java",
+           "@Service\n"
+           "public class OrderService {\n"
+           "    @Autowired\n"
+           "    private InventoryClient inventoryClient;\n"
+           "}\n")
+    g = run_bindings(tmp_path, categories=["di"])
+    assert g["stats"]["by_provider"] == {"spring": 1}
+    inj = [e for e in g["edges"] if e["relation"] == "injects"]
+    assert len(inj) == 1
+    assert inj[0]["confidence"] == "INFERRED"          # name-resolved, not type-exact
+    assert inj[0]["metadata"]["injected_type"] == "InventoryClient"
+    # source is the enclosing class node (folds onto AST)
+    src = next(n for n in g["nodes"] if n["id"] == inj[0]["source"])
+    assert src["kind"] == "class" and src["label"] == "OrderService"
+
+
+def test_di_reconcile_resolves_type_target_by_name(tmp_path):
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    _write(svc, "OrderService.java",
+           "@Service\npublic class OrderService {\n"
+           "    @Autowired\n    private InventoryClient client;\n}\n")
+    raw = run_bindings(tmp_path, categories=["di"])
+    # AST-side: the OrderService class and the InventoryClient type it injects
+    base = {"nodes": [
+        {"id": "ast_order_service", "label": "OrderService",
+         "source_file": str(svc / "OrderService.java"), "source_location": "L2"},
+        {"id": "ast_inventory_client", "label": "InventoryClient",
+         "source_file": str(svc / "InventoryClient.java"), "source_location": "L2"},
+    ], "edges": []}
+    out = reconcile_contract(base, raw)
+    assert out["reconciliation"]["type_targets_resolved"] == 1
+    inj = [e for e in out["edges"] if e["relation"] == "injects"][0]
+    # class folded onto AST source; type target resolved by name to AST node
+    assert inj["source"] == "ast_order_service"
+    assert inj["target"] == "ast_inventory_client"
+
+
+def test_di_unresolved_type_target_kept_raw(tmp_path):
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    _write(svc, "OrderService.java",
+           "@Service\npublic class OrderService {\n"
+           "    @Autowired\n    private ExternalGateway gw;\n}\n")
+    raw = run_bindings(tmp_path, categories=["di"])
+    # no AST node for ExternalGateway → target stays raw (demote-not-delete)
+    base = {"nodes": [
+        {"id": "ast_order_service", "label": "OrderService",
+         "source_file": str(svc / "OrderService.java"), "source_location": "L2"},
+    ], "edges": []}
+    out = reconcile_contract(base, raw)
+    assert out["reconciliation"]["type_targets_resolved"] == 0
+    inj = [e for e in out["edges"] if e["relation"] == "injects"][0]
+    assert inj["target"] == "ExternalGateway"     # kept, never dropped

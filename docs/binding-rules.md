@@ -70,6 +70,21 @@ in `affected.DEFAULT_AFFECTED_RELATIONS`, `blast_radius` traverses it. `triggers
 | event | Spring | `@EventListener` | `consumes` |
 | event | Kafka | `@KafkaListener` | `consumes` |
 | event | NestJS | `@EventPattern` / `@MessagePattern` | `consumes` |
+| di | Spring | `@Autowired` | `injects` |
+| di | JSR-330 | `@Inject` | `injects` |
+| di | Jakarta | `@Resource` | `injects` |
+
+# Resolution modes
+
+- **`next_def`** — the construct annotates the method below it (schedulers,
+  events). The bound handler is that def; the edge is **EXTRACTED**.
+- **`inject`** — dependency injection: the annotated member's *enclosing class*
+  depends on the *injected type*. Emits `class --injects--> Type`. The class
+  folds onto its AST node; the type-name target is resolved to an AST node by
+  name when exactly one matches (else kept raw). Name-resolved → **INFERRED**;
+  SCIP upgrades the target to a type-exact node when a SCIP index is present.
+  `blast_radius` then answers "changing this type affects the classes that
+  inject it."
 
 # Extending
 
@@ -90,10 +105,10 @@ executes them deterministically.
 
 # Deliberately out of scope
 
-- **Dependency injection.** Its target is a *type*, not the next def — it needs a
-  distinct `inject` resolution and, to be precise, SCIP type resolution (name
-  matching alone is low-confidence). The `resolution` field reserves it as the
-  next rule family rather than shipping a low-precision regex version.
+- **Constructor/token injection & non-Java DI.** The `inject` resolution
+  currently covers Java field/setter injection (`@Autowired`/`@Inject`/
+  `@Resource`). Constructor-parameter injection and NestJS/TS token injection are
+  the next increment on the same resolution mode.
 - **Tier B (cloud/IaC) schedulers** — EventBridge / Cloud Scheduler / k8s
   CronJob — live outside application code; see
   [scheduler-detection-design.md](./scheduler-detection-design.md).

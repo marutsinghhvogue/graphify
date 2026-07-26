@@ -336,23 +336,33 @@ def _path_suffix_match(a: str, b: str) -> bool:
     return n > 0 and pa[-n:] == pb[-n:]
 
 
+# Emitted node kinds that have a tree-sitter AST twin (fold onto it). Synthetic
+# construct nodes (route/schedule/event/topic) do not — they are kept as new.
+_FOLDABLE_KINDS = {"function", "class"}
+# Edge relations whose target is a raw *type name* (not an emitted node id) and so
+# is resolved against AST nodes by name — dependency injection.
+_TYPE_TARGET_RELATIONS = {"injects"}
+
+
 def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
     """Merge an introspector's emitted nodes/edges onto the tree-sitter (``base``)
-    graph on ``(path-suffix, function-name)`` identity. Generic over the emitter —
-    used for cross-service contract handlers and for scheduler handlers
-    (``schedule_introspect``); any ``kind='function'`` node is a fold candidate,
-    any other node kind (``route``, ``schedule``) is kept as new.
+    graph on ``(path-suffix, symbol-name)`` identity. Generic over the emitter —
+    cross-service contract handlers, scheduler/event handlers, and DI class nodes.
 
-    Each contract *function* node (``kind='function'``) that lands on exactly one
-    base AST node is folded into it: the AST node stays canonical and is stamped
-    ``metadata.service``; the contract id maps to it and its edges are rewritten
-    onto it. Endpoint (``kind='route'``) nodes have no AST twin and are kept as
-    new; contract function nodes matching 0 or >1 base nodes are also kept —
-    never name-guessed — mirroring ``reconcile_scip``.
+    A foldable emitted node (``kind`` in ``function``/``class``) that lands on
+    exactly one base AST node is folded into it: the AST node stays canonical and
+    is stamped ``metadata.service``; the emitted id maps to it and its edges are
+    rewritten onto it. Synthetic construct nodes (``route``/``schedule``/``event``/
+    ``topic``) have no AST twin and are kept as new; foldable nodes matching 0 or
+    >1 base nodes are also kept — never name-guessed — mirroring ``reconcile_scip``.
 
-    Returns ``{"nodes": <contract nodes to ADD>, "edges": <endpoint-rewritten
-    edges>, "reconciliation": {...}}``. ``base`` node dicts are mutated in place
-    (service stamped) but NOT returned — the caller already holds them.
+    ``injects`` edges carry a raw *type-name* target (dependency injection): it is
+    resolved to a base node by name when exactly one matches (INFERRED), else kept
+    raw (demote-not-delete; SCIP can resolve it later).
+
+    Returns ``{"nodes": <emitted nodes to ADD>, "edges": <rewritten edges>,
+    "reconciliation": {...}}``. ``base`` node dicts are mutated in place (service
+    stamped) but NOT returned — the caller already holds them.
     """
     from collections import defaultdict
 
@@ -361,12 +371,15 @@ def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[s
     c_edges = list(contract.get("edges", contract.get("links", [])))
 
     by_name: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    by_bare_name: dict[str, list[dict]] = defaultdict(list)
     for n in base_nodes:
         base_name = (n.get("source_file") or "").replace("\\", "/").rsplit("/", 1)[-1]
         label = n.get("label") or ""
         if label == base_name:
             continue  # file-container node, not a symbol definition
-        by_name[(base_name, _norm_fn_name(label))].append(n)
+        norm = _norm_fn_name(label)
+        by_name[(base_name, norm)].append(n)
+        by_bare_name[norm].append(n)
 
     id_map: dict[str, str] = {}
     keep: list[dict] = []
@@ -374,8 +387,8 @@ def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[s
 
     for cn in c_nodes:
         cid = cn["id"]
-        if cn.get("kind") != "function":
-            id_map[cid] = cid            # endpoint/route node — no AST twin
+        if cn.get("kind") not in _FOLDABLE_KINDS:
+            id_map[cid] = cid            # synthetic construct node — no AST twin
             keep.append(cn)
             continue
         cfile = cn.get("source_file") or ""
@@ -403,12 +416,24 @@ def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[s
             else:
                 unmatched += 1
 
+    def _resolve_type_target(name: str) -> str:
+        cands = by_bare_name.get(_norm_fn_name(name), [])
+        return cands[0]["id"] if len(cands) == 1 else name
+
     seen: set[tuple] = set()
     edges_out: list[dict] = []
+    type_resolved = 0
     for e in c_edges:
         e = dict(e)
         e["source"] = id_map.get(e.get("source"), e.get("source"))
-        e["target"] = id_map.get(e.get("target"), e.get("target"))
+        tgt = e.get("target")
+        if tgt in id_map:
+            e["target"] = id_map[tgt]
+        elif e.get("relation") in _TYPE_TARGET_RELATIONS and isinstance(tgt, str):
+            resolved = _resolve_type_target(tgt)
+            if resolved != tgt:
+                type_resolved += 1
+            e["target"] = resolved
         k = (e.get("source"), e.get("target"), e.get("relation"))
         if k in seen:
             continue
@@ -419,9 +444,10 @@ def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[s
         "nodes": keep,
         "edges": edges_out,
         "reconciliation": {
-            "contract_fn_nodes": sum(1 for n in c_nodes if n.get("kind") == "function"),
+            "contract_fn_nodes": sum(1 for n in c_nodes if n.get("kind") in _FOLDABLE_KINDS),
             "matched": matched,
             "kept_new": unmatched,
             "ambiguous_kept_new": ambiguous,
+            "type_targets_resolved": type_resolved,
         },
     }
