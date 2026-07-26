@@ -1,0 +1,13 @@
+service: billing
+
+provider:
+  name: aws
+  runtime: python3.12
+
+functions:
+  rollup:
+    handler: src/jobs.rollup_daily
+    events:
+      - schedule: cron(0 3 * * ? *)
+  webhook:
+    handler: src/api.webhook
