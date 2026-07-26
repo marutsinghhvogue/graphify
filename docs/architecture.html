@@ -225,7 +225,8 @@
         <div class="row">
           <span class="mod">NetworkX in-memory + graph.json <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">Postgres: symbols + code_edges <span class="badge b-built"><i class="dot"></i></span></span>
-          <span class="mod">code_chunks (pgvector + FTS) <span class="badge b-designed"><i class="dot"></i></span></span>
+          <span class="mod">code_chunks (pgvector + FTS) <span class="badge b-built"><i class="dot"></i></span></span>
+          <span class="mod">real embeddings (OpenAI/Gemini) <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">recursive-CTE blast radius <span class="badge b-designed"><i class="dot"></i></span></span>
         </div>
       </div>
@@ -383,15 +384,16 @@
           <li>Binding engine: schedulers, events, DI (rules-as-data)</li>
           <li>LLM rule authoring (<code>learn-bindings</code>)</li>
           <li><code>blast_radius</code> MCP tool — cross-boundary, tiered</li>
-          <li>Postgres sink + <code>export-pg</code> CLI</li>
+          <li>Stage 2: <code>discover_seeds</code> (BM25 + hybrid embeddings)</li>
+          <li>Postgres sink + <code>export-pg</code> / <code>export-chunks</code></li>
           <li>React dashboard over the graph API</li>
         </ul>
       </div>
       <div class="panel">
         <h3>Designed / next <span class="badge b-designed"><i class="dot"></i></span></h3>
         <ul class="clean">
-          <li>Real embeddings + Postgres <b>code_chunks</b> (hybrid Stage 2 at scale)</li>
           <li>Recursive-CTE blast radius in Postgres (cross-repo scale)</li>
+          <li>Hybrid seed search over persisted <b>code_chunks</b> as an MCP tool</li>
           <li>Tier-B schedulers: EventBridge / Cloud Scheduler / k8s CronJob</li>
           <li>DI: constructor/token injection, non-Java</li>
           <li>Per-caller demote before persist</li>
