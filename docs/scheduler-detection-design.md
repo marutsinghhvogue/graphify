@@ -13,8 +13,18 @@ decorator/annotation-bound schedulers (Spring `@Scheduled`, NestJS
 `@periodic_task`), emits `schedule` nodes + EXTRACTED `triggers` edges, and
 reconciles handler nodes onto the tree-sitter AST via `reconcile_contract` so
 `blast_radius` traverses them (`triggers` is in `DEFAULT_AFFECTED_RELATIONS`).
-Fixtures: `tests/fixtures/schedulers/`. **Tier B (cloud/IaC) remains designed,
-not built** — see below.
+Fixtures: `tests/fixtures/schedulers/`.
+
+**Tier B (cloud/IaC) is now BUILT too** — `graphify/cloud_schedule_introspect.py`
+(`cloud_schedule_graph`), wired as `graphify extract --cloud-schedulers`. Detects
+schedules declared in Terraform (`aws_cloudwatch_event_rule` /
+`aws_scheduler_schedule` / `google_cloud_scheduler_job` / azurerm logic-app), k8s
+`CronJob`, and `serverless.yml`, emitting `schedule` nodes tagged INFERRED with
+their cron/rate expression + a best-effort `triggers` edge (serverless links the
+named handler). Terraform via regex (dependency-free); YAML via a lazy PyYAML
+import. Fixtures: `tests/fixtures/cloudsched/`. **Remaining:** cross-resource
+target resolution (EventBridge→Lambda ARN, k8s container) and the live cloud-API
+tier for ClickOps (console-created) schedules — see below.
 
 # TL;DR
 

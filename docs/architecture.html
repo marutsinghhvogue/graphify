@@ -227,7 +227,7 @@
           <span class="mod">Postgres: symbols + code_edges <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">code_chunks (pgvector + FTS) <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">real embeddings (OpenAI/Gemini) <span class="badge b-built"><i class="dot"></i></span></span>
-          <span class="mod">recursive-CTE blast radius <span class="badge b-designed"><i class="dot"></i></span></span>
+          <span class="mod">recursive-CTE blast radius <span class="badge b-built"><i class="dot"></i></span></span>
         </div>
       </div>
       <div class="flowdown">↓</div>
@@ -236,7 +236,8 @@
         <div class="lname">6 · Serving<span>agent + human</span></div>
         <div class="row">
           <span class="mod">MCP: discover_seeds (Stage 2) <span class="badge b-built"><i class="dot"></i></span></span>
-          <span class="mod">MCP: blast_radius <span class="badge b-built"><i class="dot"></i></span></span>
+          <span class="mod">MCP: blast_radius (+ _pg) <span class="badge b-built"><i class="dot"></i></span></span>
+          <span class="mod">MCP: discover_seeds_pg (hybrid) <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">MCP: find_callers / callees <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">MCP: query / community / god_nodes <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">Flask web API <span class="badge b-built"><i class="dot"></i></span></span>
@@ -306,7 +307,7 @@
       <span class="mod">@KafkaListener → <b style="color:var(--extracted)">consumes</b></span>
       <span class="mod">@EventPattern → <b style="color:var(--extracted)">consumes</b></span>
       <span class="mod">@Autowired / @Inject → <b style="color:var(--inferred)">injects</b></span>
-      <span class="mod weak" style="opacity:.6">Tier B cloud/IaC <span class="badge b-designed"><i class="dot"></i></span></span>
+      <span class="mod">Tier B cloud/IaC (TF/k8s/serverless) <span class="badge b-built"><i class="dot"></i></span></span>
     </div>
   </section>
 
@@ -385,6 +386,8 @@
           <li>LLM rule authoring (<code>learn-bindings</code>)</li>
           <li><code>blast_radius</code> MCP tool — cross-boundary, tiered</li>
           <li>Stage 2: <code>discover_seeds</code> (BM25 + hybrid embeddings)</li>
+          <li>Postgres query layer: recursive-CTE blast radius + hybrid search</li>
+          <li>Tier-B cloud schedulers (Terraform / k8s / serverless)</li>
           <li>Postgres sink + <code>export-pg</code> / <code>export-chunks</code></li>
           <li>React dashboard over the graph API</li>
         </ul>
@@ -392,11 +395,11 @@
       <div class="panel">
         <h3>Designed / next <span class="badge b-designed"><i class="dot"></i></span></h3>
         <ul class="clean">
-          <li>Recursive-CTE blast radius in Postgres (cross-repo scale)</li>
-          <li>Hybrid seed search over persisted <b>code_chunks</b> as an MCP tool</li>
-          <li>Tier-B schedulers: EventBridge / Cloud Scheduler / k8s CronJob</li>
+          <li>Live cloud-API scheduler tier (ClickOps — console-created rules)</li>
+          <li>EventBridge→Lambda / k8s target resolution (cross-resource ARNs)</li>
           <li>DI: constructor/token injection, non-Java</li>
           <li>Per-caller demote before persist</li>
+          <li>Cross-repo estate rollup over persisted Postgres</li>
         </ul>
       </div>
     </div>
