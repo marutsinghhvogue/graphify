@@ -1,11 +1,14 @@
 """Tests for semantic_index — Stage 2 prose→seed retrieval (pure, offline)."""
 from __future__ import annotations
 
+import pytest
+
 from graphify.semantic_index import (
     BM25,
     HashingEmbedder,
     chunk_extraction,
     cosine,
+    get_embedder,
     reciprocal_rank_fusion,
     retrieve_seeds,
     tokenize,
@@ -104,3 +107,28 @@ def test_retrieve_seeds_hybrid_tags_both():
 def test_retrieve_seeds_empty_query_and_corpus():
     assert retrieve_seeds("anything", []) == []
     assert retrieve_seeds("zzzznomatch", chunk_extraction(_GRAPH)) == []
+
+
+# --- embedder factory: default offline, real providers gated on credentials ---
+
+def test_get_embedder_defaults_to_hashing():
+    assert isinstance(get_embedder(), HashingEmbedder)
+    assert isinstance(get_embedder("hashing"), HashingEmbedder)
+
+
+def test_get_embedder_unknown_name_raises():
+    with pytest.raises(ValueError):
+        get_embedder("word2vec9000")
+
+
+def test_get_embedder_openai_requires_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        get_embedder("openai")
+
+
+def test_get_embedder_gemini_requires_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        get_embedder("gemini")

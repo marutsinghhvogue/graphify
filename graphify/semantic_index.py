@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -173,6 +174,68 @@ class HashingEmbedder:
 
 def cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))  # inputs are L2-normalized
+
+
+class OpenAIEmbedder:
+    """Real embeddings via the OpenAI API (default ``text-embedding-3-small``).
+    Lazy client; batched. Needs ``OPENAI_API_KEY`` and the ``openai`` package."""
+
+    def __init__(self, model: str = "text-embedding-3-small", *,
+                 api_key: str | None = None, dim: int = 1536, batch: int = 256):
+        self.model, self.dim, self.batch = model, dim, batch
+        self._key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not self._key:
+            raise ValueError("OPENAI_API_KEY is not set — required for OpenAI embeddings")
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            from openai import OpenAI
+        except ImportError as exc:  # pragma: no cover - exercised only without the extra
+            raise ImportError("the 'openai' package is required: pip install openai") from exc
+        client = OpenAI(api_key=self._key)
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.batch):
+            resp = client.embeddings.create(model=self.model, input=texts[i:i + self.batch])
+            out.extend(d.embedding for d in resp.data)
+        return out
+
+
+class GeminiEmbedder:
+    """Real embeddings via the Google Gemini API. Needs ``GEMINI_API_KEY`` (or
+    ``GOOGLE_API_KEY``) and the ``google-generativeai`` package."""
+
+    def __init__(self, model: str = "models/text-embedding-004", *,
+                 api_key: str | None = None, dim: int = 768):
+        self.model, self.dim = model, dim
+        self._key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not self._key:
+            raise ValueError("GEMINI_API_KEY (or GOOGLE_API_KEY) is not set — required for Gemini embeddings")
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            import google.generativeai as genai
+        except ImportError as exc:  # pragma: no cover
+            raise ImportError("the 'google-generativeai' package is required") from exc
+        genai.configure(api_key=self._key)
+        out: list[list[float]] = []
+        for t in texts:
+            r = genai.embed_content(model=self.model, content=t)
+            out.append(r["embedding"])
+        return out
+
+
+def get_embedder(name: str | None = None, **kwargs: Any) -> EmbeddingProvider:
+    """Resolve an embedder by name. ``hashing`` (default, offline/deterministic),
+    ``openai``, or ``gemini``. Raises ``ValueError`` for an unknown name or a
+    provider whose credentials aren't configured — never silently degrades."""
+    key = (name or "hashing").lower()
+    if key in ("hashing", "local", "offline", "none"):
+        return HashingEmbedder(**kwargs)
+    if key == "openai":
+        return OpenAIEmbedder(**kwargs)
+    if key in ("gemini", "google"):
+        return GeminiEmbedder(**kwargs)
+    raise ValueError(f"unknown embedder {name!r}; choose one of: hashing, openai, gemini")
 
 
 # ── fusion + the query ────────────────────────────────────────────────────────

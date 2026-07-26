@@ -2217,7 +2217,9 @@ def main() -> None:
         print("    --out <path>            output path (default: overwrite --graph)")
         print("    --force                 allow overwrite even if node count drops")
         print("  seeds \"<text>\" [graph]  Stage 2: prose requirement -> ranked code symbols it touches")
-        print("                          (BM25 over names/paths/docs); feed the seeds into blast_radius")
+        print("                          (BM25 over names/paths/docs); --embed openai|gemini for hybrid")
+        print("  export-chunks [graph]   embed symbols + persist code_chunks (pgvector+FTS) to Postgres")
+        print("                          --repo R [--embed hashing|openai|gemini] [--dsn D]")
         print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
         print("                          no rule yet (schedulers/events); --write persists them to")
         print("                          .graphify_binding_rules.json for deterministic --bindings runs")
@@ -3190,6 +3192,8 @@ def main() -> None:
         p.add_argument("query")
         p.add_argument("graph", nargs="?", default=None)
         p.add_argument("--top", type=int, default=10)
+        p.add_argument("--embed", default=None,
+                       help="embedder for hybrid retrieval: hashing|openai|gemini (default: lexical-only)")
         ns = p.parse_args(sys.argv[2:])
         gp = Path(ns.graph).resolve() if ns.graph else _default_graph_path()
         gp = Path(gp)
@@ -3197,8 +3201,15 @@ def main() -> None:
             print(f"error: graph file not found: {gp} (run `graphify extract` first)", file=sys.stderr)
             sys.exit(1)
         raw = json.loads(gp.read_text(encoding="utf-8"))
-        from graphify.semantic_index import chunk_extraction, retrieve_seeds
-        hits = retrieve_seeds(ns.query, chunk_extraction(raw), top_n=ns.top)
+        from graphify.semantic_index import chunk_extraction, get_embedder, retrieve_seeds
+        embedder = None
+        if ns.embed:
+            try:
+                embedder = get_embedder(ns.embed)
+            except (ValueError, ImportError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+        hits = retrieve_seeds(ns.query, chunk_extraction(raw), embedder=embedder, top_n=ns.top)
         if not hits:
             print(f"No seed symbols found for: {ns.query}")
         else:
@@ -3206,6 +3217,39 @@ def main() -> None:
             for h in hits:
                 kind = f" ({h.kind})" if h.kind else ""
                 print(f"  {h.score:.4f} [{h.matched}] {h.name}{kind}  {h.path}")
+    elif cmd == "export-chunks":
+        # graphify export-chunks [graph.json] --repo R [--embed E] [--dsn D]
+        # Embed the graph's symbols and persist code_chunks (pgvector + FTS) for
+        # embed-once / query-many hybrid seed search at scale.
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify export-chunks")
+        p.add_argument("graph", nargs="?", default=None)
+        p.add_argument("--repo", required=True)
+        p.add_argument("--embed", default="hashing")
+        p.add_argument("--dsn", default=None)
+        ns = p.parse_args(sys.argv[2:])
+        gp = Path(ns.graph).resolve() if ns.graph else _default_graph_path()
+        gp = Path(gp)
+        if not gp.exists():
+            print(f"error: graph file not found: {gp} (run `graphify extract` first)", file=sys.stderr)
+            sys.exit(1)
+        raw = json.loads(gp.read_text(encoding="utf-8"))
+        from graphify.pg_chunks import export_chunks_to_postgres
+        from graphify.semantic_index import chunk_extraction, get_embedder
+        chunks = chunk_extraction(raw, repo=ns.repo)
+        if not chunks:
+            print("No chunkable symbols in the graph.")
+            sys.exit(0)
+        try:
+            embedder = get_embedder(ns.embed)
+            print(f"[graphify export-chunks] embedding {len(chunks)} chunks via {ns.embed}...")
+            embeddings = embedder.embed([c.text for c in chunks])
+            counts = export_chunks_to_postgres(chunks, embeddings, repo=ns.repo, dsn=ns.dsn)
+        except (ValueError, ImportError, ConnectionError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Persisted {counts['chunks']} code_chunks (repo={ns.repo}, embedder={ns.embed}).")
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]
