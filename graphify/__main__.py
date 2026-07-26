@@ -2216,6 +2216,9 @@ def main() -> None:
         print("    --graph <path>          base graph.json (default graphify-out/graph.json)")
         print("    --out <path>            output path (default: overwrite --graph)")
         print("    --force                 allow overwrite even if node count drops")
+        print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
+        print("                          no rule yet (schedulers/events); --write persists them to")
+        print("                          .graphify_binding_rules.json for deterministic --bindings runs")
         print("  export-pg [graph.json]  persist nodes/edges into Postgres (symbols + code_edges)")
         print("    --repo <name>           repo/service name (required)")
         print("    --source <label>        edge provenance / replace-scope (default: graphify)")
@@ -3113,6 +3116,69 @@ def main() -> None:
             sys.exit(1)
         print(f"Exported to Postgres (repo={repo}, source={source}): "
               f"{counts['symbols']} symbols, {counts['edges']} edges")
+    elif cmd == "learn-bindings":
+        # graphify learn-bindings [path] [--backend B] [--model M] [--write]
+        # LLM proposes binding rules for framework constructs graphify has no rule
+        # for; validated deterministically; --write persists them (human ratifies).
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify learn-bindings")
+        p.add_argument("path", nargs="?", default=".")
+        p.add_argument("--backend", default=None)
+        p.add_argument("--model", default=None)
+        p.add_argument("--write", action="store_true",
+                       help="persist accepted rules to .graphify_binding_rules.json (default: dry-run)")
+        ns = p.parse_args(sys.argv[2:])
+        target_dir = Path(ns.path).resolve()
+        if not target_dir.is_dir():
+            print(f"error: not a directory: {target_dir}", file=sys.stderr)
+            sys.exit(1)
+
+        from graphify.binding_rules import load_rules
+        from graphify.learn_bindings import harvest_candidates, persist_rules, propose_rules
+
+        rules = load_rules(target_dir)
+        candidates = harvest_candidates(target_dir, rules)
+        if not candidates:
+            print("No uncovered framework constructs found — nothing to learn.")
+            sys.exit(0)
+        print(f"Found {len(candidates)} uncovered annotation(s):")
+        for c in candidates:
+            print(f"  @{c.annotation} ({c.lang}, {c.count}x)")
+
+        backend = ns.backend
+        if backend is None:
+            from graphify.llm import detect_backend
+            backend = detect_backend()
+        if backend is None:
+            print("error: no LLM backend configured (set ANTHROPIC_API_KEY etc. "
+                  "or pass --backend)", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"\nAsking {backend} to propose scheduler/event rules...")
+        try:
+            accepted, rejected = propose_rules(candidates, backend=backend, model=ns.model)
+        except (ImportError, ValueError, RuntimeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        if rejected:
+            print(f"\nRejected {len(rejected)} invalid proposal(s):")
+            for d, reason in rejected:
+                print(f"  - {d.get('id', d)}: {reason}")
+        if not accepted:
+            print("\nNo valid rules proposed.")
+            sys.exit(0)
+
+        print(f"\nProposed {len(accepted)} rule(s):")
+        for r in accepted:
+            print(f"  [{r.category}] {r.id}  {r.pattern}  --{r.relation}-->")
+        if ns.write:
+            out = persist_rules(target_dir, accepted)
+            print(f"\nWrote {len(accepted)} rule(s) to {out}. "
+                  f"Run `graphify extract --bindings` to use them.")
+        else:
+            print("\n(dry run) re-run with --write to persist these rules.")
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]
