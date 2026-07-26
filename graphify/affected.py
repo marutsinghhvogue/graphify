@@ -20,11 +20,13 @@ DEFAULT_AFFECTED_RELATIONS = (
     "uses",
     "mixes_in",
     "embeds",
-    # cross-service + scheduled entry points: the edges the compiler/tree-sitter
-    # can't see across a service boundary, so blast radius reaches other services
-    # and timed triggers, not just in-process callers.
+    # cross-service + scheduled + event-driven entry points: the edges the
+    # compiler/tree-sitter can't see across a service boundary, so blast radius
+    # reaches other services, timed triggers, and message/event handlers, not
+    # just in-process callers.
     "calls_service",
     "triggers",
+    "consumes",
 )
 
 

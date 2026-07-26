@@ -674,7 +674,7 @@ def _format_blast_radius(G: nx.Graph, seed_query: str, *, depth: int = 2) -> str
         tiers[conf] = tiers.get(conf, 0) + 1
         svc = (d.get("metadata") or {}).get("service")
         svc_tag = f" {{{sanitize_label(str(svc))}}}" if svc else ""
-        if h.via_relation in ("calls_service", "triggers"):
+        if h.via_relation in ("calls_service", "triggers", "consumes"):
             cross_boundary += 1
         src = d.get("source_file") or "-"
         loc = f"{src}:{d.get('source_location')}" if d.get("source_location") else str(src)
@@ -685,7 +685,7 @@ def _format_blast_radius(G: nx.Graph, seed_query: str, *, depth: int = 2) -> str
         )
     footer = "tiers: " + ", ".join(f"{k}={v}" for k, v in sorted(tiers.items()))
     if cross_boundary:
-        footer += f"; cross-service/scheduled hits: {cross_boundary}"
+        footer += f"; cross-boundary (service/schedule/event) hits: {cross_boundary}"
     lines.append(footer)
     return "\n".join(lines)
 

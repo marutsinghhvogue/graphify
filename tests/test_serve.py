@@ -773,7 +773,7 @@ def test_blast_radius_crosses_service_boundary_and_tiers():
     assert "[calls]" in out and "[EXTRACTED]" in out
     # confidence-tier summary + cross-boundary count in the footer
     assert "tiers:" in out
-    assert "cross-service/scheduled hits: 1" in out
+    assert "cross-boundary (service/schedule/event) hits: 1" in out
 
 
 def test_blast_radius_unknown_seed():

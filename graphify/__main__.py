@@ -2308,6 +2308,9 @@ def main() -> None:
         print("                            (FastAPI/NestJS/Spring); edges tagged INFERRED/AMBIGUOUS")
         print("    --schedulers            detect in-code schedulers (@Scheduled/@Cron/scheduled_job/")
         print("                            periodic_task) → schedule nodes + 'triggers' edges to handlers")
+        print("    --bindings              detect all framework constructs via the binding-rule registry")
+        print("                            (schedulers + event/message listeners + rules in")
+        print("                            .graphify_binding_rules.json) → typed edges to handlers")
         print("    --global                also merge the resulting graph into the global graph")
         print("    --as <tag>              repo tag for --global (default: target directory name)")
         print("  global add <graph.json>  add/update a project graph in the global graph (~/.graphify/global-graph.json)")
@@ -4391,7 +4394,7 @@ def main() -> None:
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers]",
+                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers] [--bindings]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4414,6 +4417,7 @@ def main() -> None:
         cli_cargo: bool = False
         cli_cross_service: bool = False
         cli_schedulers: bool = False
+        cli_bindings: bool = False
         no_cluster = False
         dedup_llm = False
         google_workspace = False
@@ -4521,6 +4525,9 @@ def main() -> None:
                 i += 1
             elif a == "--schedulers":
                 cli_schedulers = True
+                i += 1
+            elif a == "--bindings":
+                cli_bindings = True
                 i += 1
             else:
                 i += 1
@@ -4903,13 +4910,37 @@ def main() -> None:
                   + f"; reconciled {_srec.get('matched', 0)}/{_srec.get('contract_fn_nodes', 0)} "
                   f"handlers onto AST nodes")
 
-        # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result. Order matters for deduplication: passing AST
+        # Framework bindings (Tier A, in-code): the full declarative binding-rule
+        # registry — schedulers + event/message listeners + any user/LLM-authored
+        # rule in .graphify_binding_rules.json. Each construct → a synthetic node +
+        # a typed edge to its handler, reconciled onto AST. The pluggable superset
+        # of --schedulers.
+        bind_result: dict = {"nodes": [], "edges": []}
+        if cli_bindings:
+            from graphify.binding_rules import run_bindings
+            from graphify.contract_introspect import reconcile_contract
+            print("[graphify extract] detecting framework bindings (schedulers/events/…)...")
+            try:
+                bind_raw = run_bindings(target)
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            bind_result = reconcile_contract(ast_result, bind_raw)
+            _b = bind_raw.get("stats", {})
+            _brec = bind_result.get("reconciliation", {})
+            _bc = ", ".join(f"{k}={v}" for k, v in sorted(_b.get("by_category", {}).items()))
+            print(f"[graphify extract] bindings: {_b.get('bindings', 0)} found"
+                  + (f" ({_bc})" if _bc else "")
+                  + f" from {_b.get('rules', 0)} rules; reconciled "
+                  f"{_brec.get('matched', 0)}/{_brec.get('contract_fn_nodes', 0)} handlers onto AST nodes")
+
+        # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result + bind_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the
         # semantic side.
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])) + list(bind_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])) + list(bind_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),

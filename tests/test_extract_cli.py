@@ -281,6 +281,49 @@ def test_extract_schedulers_wires_triggers_edges(monkeypatch, tmp_path):
         assert e["target"] in node_ids
 
 
+def test_extract_bindings_detects_events_and_external_rules(monkeypatch, tmp_path):
+    """`extract --bindings` runs the full binding-rule registry (built-in events +
+    an external/LLM rule) and merges reconciled edges into the graph."""
+    import json
+
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    (svc / "Listener.java").write_text(
+        "@KafkaListener(topics = \"orders\")\n"
+        "public void onOrder(String p) {\n    handle();\n}\n\n"
+        "public void handle() {\n}\n"
+    )
+    (svc / "custom.py").write_text(
+        "@my_worker('nightly')\n"
+        "def sync_job():\n    return 1\n"
+    )
+    # a framework with no built-in rule — added purely as a data row
+    (tmp_path / ".graphify_binding_rules.json").write_text(json.dumps({"rules": [{
+        "id": "worker.custom", "category": "worker", "provider": "custom",
+        "languages": ["python"], "pattern": r"^\s*@my_worker\b",
+        "relation": "runs", "node_kind": "worker",
+    }]}))
+
+    out_dir = tmp_path / "out"
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys, "argv",
+        ["graphify", "extract", str(tmp_path), "--bindings",
+         "--no-cluster", "--out", str(out_dir)],
+    )
+
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0), f"unexpected exit code {exc.code}"
+
+    graph = json.loads((out_dir / "graphify-out" / "graph.json").read_text())
+    rels = {e.get("relation") for e in graph.get("edges", graph.get("links", []))}
+    assert "consumes" in rels, "built-in Kafka event rule should fire"
+    assert "runs" in rels, "external/LLM rule should add a new construct with no code change"
+
+
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     """`extract --out DIR` routes every artifact to DIR/graphify-out/ and the
     scanned project must not grow a graphify-out/ (or anything else) beside
