@@ -807,3 +807,22 @@ def test_discover_seeds_no_match():
     G = nx.DiGraph()
     G.add_node("a", label="Alpha", source_file="a.py")
     assert "No seed symbols found" in _format_discover_seeds(G, "zzznomatchhere")
+
+
+# --- Postgres-backed tools degrade gracefully when the DB/extra is absent ---
+
+def test_format_blast_radius_pg_handles_missing_backend(monkeypatch):
+    from graphify import serve as serve_mod
+
+    def _boom(*a, **k):
+        raise ConnectionError("no database here")
+    monkeypatch.setattr("graphify.pg_query.blast_radius_pg", _boom)
+    out = serve_mod._format_blast_radius_pg("repo", "sym", depth=2)
+    assert "Postgres unavailable" in out and "no database here" in out
+
+
+def test_format_discover_seeds_pg_reports_unknown_embedder():
+    from graphify import serve as serve_mod
+    # get_embedder raises ValueError for an unknown provider → surfaced, not crash
+    out = serve_mod._format_discover_seeds_pg("q", "repo", embed="word2vec9000")
+    assert "unavailable" in out

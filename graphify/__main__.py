@@ -2220,6 +2220,10 @@ def main() -> None:
         print("                          (BM25 over names/paths/docs); --embed openai|gemini for hybrid")
         print("  export-chunks [graph]   embed symbols + persist code_chunks (pgvector+FTS) to Postgres")
         print("                          --repo R [--embed hashing|openai|gemini] [--dsn D]")
+        print("  blast-radius <symbol>   Stage 3 at scale: reverse-reachability over persisted")
+        print("                          code_edges (recursive CTE) --repo R [--depth N] [--dsn D]")
+        print("  search-chunks \"<text>\"  hybrid seed search over persisted code_chunks (pgvector+FTS)")
+        print("                          --repo R [--embed E] [--top N] [--dsn D]")
         print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
         print("                          no rule yet (schedulers/events); --write persists them to")
         print("                          .graphify_binding_rules.json for deterministic --bindings runs")
@@ -3250,6 +3254,56 @@ def main() -> None:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"Persisted {counts['chunks']} code_chunks (repo={ns.repo}, embedder={ns.embed}).")
+    elif cmd == "blast-radius":
+        # graphify blast-radius <seed_symbol> --repo R [--depth N] [--dsn D]
+        # Bounded reverse-reachability over persisted code_edges (recursive CTE).
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify blast-radius")
+        p.add_argument("seed")
+        p.add_argument("--repo", required=True)
+        p.add_argument("--depth", type=int, default=3)
+        p.add_argument("--dsn", default=None)
+        ns = p.parse_args(sys.argv[2:])
+        from graphify.pg_query import blast_radius_pg
+        try:
+            rows = blast_radius_pg(ns.repo, ns.seed, depth=ns.depth, dsn=ns.dsn)
+        except (ImportError, ConnectionError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not rows:
+            print(f"Blast radius of {ns.seed} in {ns.repo} (depth {ns.depth}): no affected symbols.")
+        else:
+            print(f"Blast radius of {ns.seed} in {ns.repo} (depth {ns.depth}) — {len(rows)} affected:")
+            for r in rows:
+                print(f"  d{r['depth']} {r['symbol']}")
+    elif cmd == "search-chunks":
+        # graphify search-chunks "<query>" --repo R [--embed E] [--top N] [--dsn D]
+        # Hybrid seed search over persisted code_chunks (pgvector + FTS).
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify search-chunks")
+        p.add_argument("query")
+        p.add_argument("--repo", required=True)
+        p.add_argument("--embed", default="hashing")
+        p.add_argument("--top", type=int, default=10)
+        p.add_argument("--dsn", default=None)
+        ns = p.parse_args(sys.argv[2:])
+        from graphify.pg_query import discover_seeds_pg
+        from graphify.semantic_index import get_embedder
+        try:
+            embedder = get_embedder(ns.embed)
+            hits = discover_seeds_pg(ns.query, repo=ns.repo, embedder=embedder,
+                                     dsn=ns.dsn, top_n=ns.top)
+        except (ImportError, ConnectionError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not hits:
+            print(f"No persisted seeds for: {ns.query}")
+        else:
+            print(f'Seed symbols for "{ns.query}" in {ns.repo} (top {len(hits)}):')
+            for h in hits:
+                print(f"  {h.get('name') or h.get('symbol_id')}  {h.get('path') or '-'}")
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]

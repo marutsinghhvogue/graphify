@@ -716,6 +716,43 @@ def _format_discover_seeds(G: nx.Graph, query: str, *, top_n: int = 10) -> str:
     return "\n".join(lines)
 
 
+def _format_blast_radius_pg(repo: str, seed: str, *, depth: int = 3) -> str:
+    """Blast radius computed in Postgres (recursive CTE) — scales across the whole
+    persisted estate, not just the loaded graph. dsn comes from libpq PG* env."""
+    from graphify.pg_query import blast_radius_pg
+    try:
+        rows = blast_radius_pg(repo, seed, depth=depth)
+    except (ImportError, ConnectionError) as exc:
+        return f"Postgres unavailable: {exc}"
+    if not rows:
+        return f"Blast radius of {sanitize_label(seed)} in {sanitize_label(repo)} (depth {depth}): no affected symbols."
+    lines = [f"Blast radius of {sanitize_label(seed)} in {sanitize_label(repo)} "
+             f"(depth {depth}) — {len(rows)} affected:"]
+    for r in rows:
+        lines.append(f"  d{r['depth']} {sanitize_label(str(r['symbol']))}")
+    return "\n".join(lines)
+
+
+def _format_discover_seeds_pg(query: str, repo: str, *, top_n: int = 10, embed: str = "hashing") -> str:
+    """Hybrid seed search over persisted code_chunks (pgvector ⊕ FTS). The embedder
+    must match the one used at export-chunks time."""
+    from graphify.pg_query import discover_seeds_pg
+    from graphify.semantic_index import get_embedder
+    try:
+        embedder = get_embedder(embed)
+        hits = discover_seeds_pg(query, repo=repo, embedder=embedder, top_n=top_n)
+    except (ImportError, ConnectionError, ValueError) as exc:
+        return f"Postgres seed search unavailable: {exc}"
+    if not hits:
+        return f"No persisted seeds for: {sanitize_label(query)}"
+    lines = [f'Seed symbols for "{sanitize_label(query)}" in {sanitize_label(repo)} (top {len(hits)}):']
+    for h in hits:
+        name = sanitize_label(str(h.get("name") or h.get("symbol_id")))
+        path = sanitize_label(str(h.get("path") or "-"))
+        lines.append(f"  {name}  {path}")
+    return "\n".join(lines)
+
+
 def _filter_blank_stdin() -> None:
     """Filter blank lines from stdin before MCP reads it.
 
@@ -952,6 +989,41 @@ def _build_server(graph_path: str):
                 },
             ),
             types.Tool(
+                name="blast_radius_pg",
+                description=(
+                    "Blast radius computed in Postgres (bounded recursive CTE over persisted "
+                    "code_edges) — scales across the whole exported estate, not just the loaded "
+                    "graph. Requires `graphify export-pg` and a reachable database (PG* env)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string", "description": "Repo/estate name used at export-pg time"},
+                        "seed_symbol": {"type": "string", "description": "Exact symbol_id to analyze"},
+                        "depth": {"type": "integer", "default": 3, "description": "Max reverse-reachability hops"},
+                    },
+                    "required": ["repo", "seed_symbol"],
+                },
+            ),
+            types.Tool(
+                name="discover_seeds_pg",
+                description=(
+                    "Stage 2 over persisted code_chunks: hybrid pgvector + FTS seed search across "
+                    "the exported estate. Requires `graphify export-chunks`; the embedder must match "
+                    "the one used at export time."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Requirement / feature description in prose"},
+                        "repo": {"type": "string", "description": "Repo/estate name used at export-chunks time"},
+                        "top_n": {"type": "integer", "default": 10},
+                        "embed": {"type": "string", "default": "hashing", "description": "hashing|openai|gemini (match export)"},
+                    },
+                    "required": ["query", "repo"],
+                },
+            ),
+            types.Tool(
                 name="list_prs",
                 description=(
                     "List open GitHub PRs with CI status, review state, and graph impact "
@@ -1179,6 +1251,19 @@ def _build_server(graph_path: str):
             G, arguments["query"], top_n=int(arguments.get("top_n", 10))
         )
 
+    def _tool_blast_radius_pg(arguments: dict) -> str:
+        return _format_blast_radius_pg(
+            arguments["repo"], arguments["seed_symbol"],
+            depth=int(arguments.get("depth", 3)),
+        )
+
+    def _tool_discover_seeds_pg(arguments: dict) -> str:
+        return _format_discover_seeds_pg(
+            arguments["query"], arguments["repo"],
+            top_n=int(arguments.get("top_n", 10)),
+            embed=str(arguments.get("embed", "hashing")),
+        )
+
     def _tool_list_prs(arguments: dict) -> str:
         from graphify.prs import _detect_default_branch, fetch_prs, fetch_worktrees, format_prs_text
         repo = arguments.get("repo") or None
@@ -1284,6 +1369,8 @@ def _build_server(graph_path: str):
         "shortest_path": _tool_shortest_path,
         "blast_radius": _tool_blast_radius,
         "discover_seeds": _tool_discover_seeds,
+        "blast_radius_pg": _tool_blast_radius_pg,
+        "discover_seeds_pg": _tool_discover_seeds_pg,
         "list_prs": _tool_list_prs,
         "get_pr_impact": _tool_get_pr_impact,
         "triage_prs": _tool_triage_prs,

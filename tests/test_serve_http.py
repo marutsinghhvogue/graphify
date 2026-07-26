@@ -167,7 +167,8 @@ def test_tools_list_over_http(tmp_path):
         )
         assert resp.status_code == 200
         names = {t["name"] for t in resp.json()["result"]["tools"]}
-        assert {"query_graph", "get_node", "graph_stats", "blast_radius", "discover_seeds"} <= names
+        assert {"query_graph", "get_node", "graph_stats", "blast_radius",
+                "discover_seeds", "blast_radius_pg", "discover_seeds_pg"} <= names
 
 
 def test_stateless_mode_initialize(tmp_path):
