@@ -146,8 +146,8 @@
       </div>
       <div class="stage">
         <div class="num">STAGE 2</div><h4>Map intent → code seeds</h4>
-        <small>Prose → the symbols that must change. The weakest link.</small>
-        <div class="who"><span class="chip weak">code_chunks (vec+FTS)</span><span class="chip">aliases</span></div>
+        <small>Prose → the symbols that must change (BM25 today, hybrid next).</small>
+        <div class="who"><span class="chip">discover_seeds</span><span class="chip weak">code_chunks (pgvector)</span></div>
         <div class="arrow">▸</div>
       </div>
       <div class="stage">
@@ -234,6 +234,7 @@
       <div class="layer">
         <div class="lname">6 · Serving<span>agent + human</span></div>
         <div class="row">
+          <span class="mod">MCP: discover_seeds (Stage 2) <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">MCP: blast_radius <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">MCP: find_callers / callees <span class="badge b-built"><i class="dot"></i></span></span>
           <span class="mod">MCP: query / community / god_nodes <span class="badge b-built"><i class="dot"></i></span></span>
@@ -389,7 +390,7 @@
       <div class="panel">
         <h3>Designed / next <span class="badge b-designed"><i class="dot"></i></span></h3>
         <ul class="clean">
-          <li><b>code_chunks</b> semantic arm — prose→seed (Stage 2)</li>
+          <li>Real embeddings + Postgres <b>code_chunks</b> (hybrid Stage 2 at scale)</li>
           <li>Recursive-CTE blast radius in Postgres (cross-repo scale)</li>
           <li>Tier-B schedulers: EventBridge / Cloud Scheduler / k8s CronJob</li>
           <li>DI: constructor/token injection, non-Java</li>

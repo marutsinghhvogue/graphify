@@ -4,6 +4,17 @@ subtitle: "Why documentation and code sit in one graph but stay disconnected —
 date: "July 2026"
 ---
 
+# Status update
+
+**The Stage-2 seed-discovery arm is now built** (`graphify/semantic_index.py`,
+`graphify seeds`, MCP `discover_seeds`): a BM25 lexical retriever over per-symbol
+chunks with identifier splitting maps prose → code seeds **offline, today** —
+already past the "keyword BFS" bar this doc describes ("clean up stale orders" →
+`purgeStaleOrders`). The **vector arm** (a pluggable `EmbeddingProvider`, fused
+via RRF) and its **Postgres `code_chunks` persistence** remain the upgrade for
+true paraphrase recall at scale. The gap below is the *why* behind that vector
+upgrade; the automatic doc→code link is no longer alias-only.
+
 # TL;DR
 
 Graphify already builds **one in-memory knowledge graph spanning code and
