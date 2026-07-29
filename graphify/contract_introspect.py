@@ -51,6 +51,7 @@ class Call:
     service: str
     source_file: str
     line: int
+    target_service: str = ""   # named target (Feign) → near-exact resolution
 
 
 # ── path normalization (the validated core) ─────────────────────────────────
@@ -168,6 +169,10 @@ def _extract_endpoints(path: Path, service: str, lines: list[str], lang: str) ->
                 eps.append(Endpoint(m.group(1).upper(), normalize_path(full), full,
                                     service, _next_def_after(defs, i), str(path), i + 1))
     elif lang == "java":
+        # A @FeignClient interface uses the same @*Mapping annotations but is a
+        # CONSUMER, not a producer — its mappings are harvested in _extract_calls.
+        if any(_FEIGN_CLIENT.search(ln) for ln in lines):
+            return eps
         cprefix = ""
         # class-level @RequestMapping precedes any method mapping
         for line in lines:
@@ -190,11 +195,44 @@ _AXIOS = re.compile(r'axios\.(get|post|put|patch|delete)\(\s*[`"\']([^`"\']+)[`"
 _PY_HTTP = re.compile(
     r'(?:requests|httpx|client|session|self\.\w+)\.(get|post|put|patch|delete)\(\s*f?["\']([^"\']+)["\']'
 )
+# Java consumers
+_FEIGN_CLIENT = re.compile(r'@FeignClient\(\s*(?:[^)]*?name\s*=\s*)?["\']([^"\']+)["\']')
+_RESTTEMPLATE = re.compile(
+    r'\.(getForObject|getForEntity|postForObject|postForEntity|put|delete|exchange)\(\s*["\']([^"\']+)["\']'
+)
+_WEBCLIENT_URI = re.compile(r'\.uri\(\s*["\']([^"\']+)["\']')
+_RT_METHOD = {"getForObject": "GET", "getForEntity": "GET", "postForObject": "POST",
+              "postForEntity": "POST", "put": "PUT", "delete": "DELETE", "exchange": "GET"}
+
+
+def _extract_java_consumers(path: Path, service: str, lines: list[str]) -> list[Call]:
+    """Feign clients (near-exact: the client names its target service) + RestTemplate
+    / WebClient URL calls."""
+    defs = _function_index(lines, "java")
+    calls: list[Call] = []
+    fm = next((_FEIGN_CLIENT.search(ln) for ln in lines if _FEIGN_CLIENT.search(ln)), None)
+    feign_svc = fm.group(1) if fm else ""
+    for i, line in enumerate(lines):
+        if feign_svc:
+            m = _SPRING_METHOD.search(line)
+            if m:
+                calls.append(Call(m.group(1).upper(), normalize_path(m.group(2)), m.group(2),
+                                  _next_def_after(defs, i), service, str(path), i + 1,
+                                  target_service=feign_svc))
+        for m in _RESTTEMPLATE.finditer(line):
+            calls.append(Call(_RT_METHOD.get(m.group(1), "GET"), normalize_path(m.group(2)),
+                              m.group(2), _enclosing(defs, i), service, str(path), i + 1))
+        for m in _WEBCLIENT_URI.finditer(line):
+            calls.append(Call("GET", normalize_path(m.group(1)), m.group(1),
+                              _enclosing(defs, i), service, str(path), i + 1))
+    return calls
 
 
 def _extract_calls(path: Path, service: str, lines: list[str], lang: str) -> list[Call]:
     defs = _function_index(lines, lang)
     calls: list[Call] = []
+    if lang == "java":
+        return _extract_java_consumers(path, service, lines)
     for i, line in enumerate(lines):
         if lang in ("ts", "python"):
             for m in _FETCH.finditer(line):
@@ -275,28 +313,35 @@ def cross_service_graph(root: str | Path) -> dict[str, Any]:
                       "context": "contract"})
 
     stats = {"endpoints": len(all_eps), "calls": len(all_calls),
-             "matched_unique": 0, "matched_ambiguous": 0, "external": 0}
+             "matched_unique": 0, "matched_ambiguous": 0, "matched_named": 0, "external": 0}
 
     for c in all_calls:
         cands = [e for e in catalog.get((c.method, c.path), []) if e.service != c.service]
+        # Feign/near-exact: the consumer named its target service, so a path
+        # collision across other services is NOT ambiguous — filter to that service.
+        named = bool(c.target_service)
+        if named:
+            cands = [e for e in cands if e.service == c.target_service]
         cid = _fn_id(c.service, c.caller)
         if not cands:
             stats["external"] += 1
             continue
         _add_node(cid, f"{c.caller}()", "function", c.source_file, c.line, service=c.service)
-        ambiguous = len(cands) > 1
-        stats["matched_ambiguous" if ambiguous else "matched_unique"] += 1
+        ambiguous = len(cands) > 1 and not named
+        stats["matched_named" if named else
+              "matched_ambiguous" if ambiguous else "matched_unique"] += 1
         for e in cands:
             hid = _fn_id(e.service, e.handler)
             edges.append({
                 "source": cid, "target": hid, "relation": "calls_service",
                 "confidence": "AMBIGUOUS" if ambiguous else "INFERRED",
-                "confidence_score": 0.5 if ambiguous else 0.9,
+                "confidence_score": 0.95 if named else 0.5 if ambiguous else 0.9,
                 "source_file": c.source_file, "source_location": f"L{c.line}",
                 "context": "cross_service",
                 "metadata": {"method": c.method, "path": c.path,
                              "to_service": e.service, "via_endpoint": _ep_id(e),
-                             "ambiguous": ambiguous, "raw_url": c.raw_url},
+                             "ambiguous": ambiguous, "named_target": named,
+                             "raw_url": c.raw_url},
             })
 
     return {"nodes": list(nodes.values()), "edges": edges, "stats": stats}

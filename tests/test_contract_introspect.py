@@ -36,7 +36,7 @@ def test_fixture_cross_service_edges():
     assert validate_extraction({"nodes": g["nodes"], "edges": g["edges"]}) == []
     assert g["stats"] == {
         "endpoints": 4, "calls": 3,
-        "matched_unique": 2, "matched_ambiguous": 0, "external": 1,
+        "matched_unique": 2, "matched_ambiguous": 0, "matched_named": 0, "external": 1,
     }
     nodes = {n["id"]: n for n in g["nodes"]}
     resolved = {
@@ -93,6 +93,62 @@ def test_path_collision_marks_ambiguous(tmp_path, monkeypatch):
     assert len(xs) == 2  # fanned out to BOTH candidates, not dropped
     assert all(e["confidence"] == "AMBIGUOUS" for e in xs)
     assert {e["metadata"]["to_service"] for e in xs} == {"svc_a", "svc_b"}
+
+
+def test_feign_client_extracted_as_consumer_with_target_service(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = tmp_path / "UserClient.java"
+    f.write_text(
+        '@FeignClient(name = "user_service")\n'
+        "public interface UserClient {\n"
+        '    @GetMapping("/users/{id}")\n'
+        "    User getUser(Long id);\n"
+        "}\n"
+    )
+    calls = ci._extract_java_consumers(f, "reporting", f.read_text().splitlines())
+    assert len(calls) == 1
+    c = calls[0]
+    assert c.method == "GET" and c.path == "/users/{}"
+    assert c.target_service == "user_service"        # Feign names the target
+    # a Feign interface must NOT be mistaken for a producer endpoint
+    assert ci._extract_endpoints(f, "reporting", f.read_text().splitlines(), "java") == []
+
+
+def test_resttemplate_call_extracted(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = tmp_path / "Client.java"
+    f.write_text(
+        "public class Client {\n"
+        '  void go() { restTemplate.getForObject("http://svc/users/{id}", User.class); }\n'
+        "}\n"
+    )
+    calls = ci._extract_java_consumers(f, "reporting", f.read_text().splitlines())
+    assert calls and calls[0].method == "GET" and calls[0].path == "/users/{}"
+
+
+def test_feign_near_exact_resolves_to_named_service(tmp_path, monkeypatch):
+    import graphify.contract_introspect as ci
+
+    # Same (GET,/users/{}) in two services, but the consumer NAMED svc_a (Feign).
+    eps = [
+        Endpoint("GET", "/users/{}", "/users/{id}", "svc_a", "get_a", "a.py", 1),
+        Endpoint("GET", "/users/{}", "/users/:id", "svc_b", "get_b", "b.ts", 1),
+    ]
+    calls = [ci.Call("GET", "/users/{}", "/users/1", "getUser", "svc_c", "c.java", 3,
+                     target_service="svc_a")]
+    monkeypatch.setattr(ci, "scan_service",
+        lambda d, name: (eps, calls) if name == "svc_a" else ([], []))
+    (tmp_path / "svc_a").mkdir()
+    g = ci.cross_service_graph(tmp_path)
+
+    assert g["stats"]["matched_named"] == 1
+    assert g["stats"]["matched_ambiguous"] == 0
+    xs = [e for e in g["edges"] if e["relation"] == "calls_service"]
+    assert len(xs) == 1                                   # not fanned out — named
+    assert xs[0]["metadata"]["to_service"] == "svc_a"     # resolved to the named service
+    assert xs[0]["confidence"] == "INFERRED" and xs[0]["confidence_score"] == 0.95
 
 
 def test_method_mismatch_is_not_a_match(tmp_path, monkeypatch):

@@ -24,8 +24,16 @@ name-guessed), preserving recall. Verified on `tests/fixtures/xservice`: 4/4
 handlers reconciled; the NestJS `getOrder` consumer reaches the Python `get_user`
 and Java `getInvoice` handlers as AST-to-AST edges.
 
+**Broader consumer harvest + Feign near-exact (R5).** Java consumers now include
+**Feign** (`@FeignClient(name=…)` interfaces — the client *names* its target
+service, so a path collision across other services is NOT ambiguous: it resolves
+near-exact, INFERRED 0.95) and **RestTemplate/WebClient** URL calls. A Feign
+interface's `@*Mapping` annotations are correctly harvested as consumer calls, not
+mistaken for producer endpoints.
+
 **Remaining next step:** field/schema-level granularity (endpoint-level only
-today) and broader consumer harvest — see the roadmap below.
+today — request/response field nodes are still a follow-up) and further producer
+harvest (Django REST, Express, gin, Rails). See the roadmap below.
 
 ## The two questions this targets
 
