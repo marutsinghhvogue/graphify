@@ -71,7 +71,44 @@ def test_base_edge_scip_did_not_reproduce_is_preserved():
     scip = {"nodes": [_n("sa", "a()", "m.py", 1)], "edges": []}
     out = reconcile_scip(base, scip)
     calls = [e for e in out["edges"] if e["relation"] == "calls"]
+    # SCIP said nothing about a's calls → its base edge is untouched (not demoted)
     assert len(calls) == 1 and calls[0]["confidence"] == "INFERRED"
+
+
+# --- per-caller demote (recall-safety) ---
+
+def _collision_case():
+    # a really calls b (SCIP-resolved); tree-sitter also guessed a→c (name collision)
+    base = {
+        "nodes": [_n("a", "a()", "m.py", 2), _n("b", "b()", "m.py", 5), _n("c", "save()", "m.py", 8)],
+        "edges": [_e("a", "b", "calls", "INFERRED", context="call"),
+                  _e("a", "c", "calls", "INFERRED", context="call")],
+    }
+    scip = {
+        "nodes": [_n("sa", "a()", "m.py", 1), _n("sb", "b()", "m.py", 4)],
+        "edges": [_e("sa", "sb", "calls", "EXTRACTED", context="scip")],
+    }
+    return base, scip
+
+
+def test_per_caller_demote_of_contradicted_call():
+    base, scip = _collision_case()
+    out = reconcile_scip(base, scip)
+    calls = {(e["source"], e["target"]): e for e in out["edges"] if e["relation"] == "calls"}
+    assert calls[("a", "b")]["confidence"] == "EXTRACTED"    # SCIP-confirmed
+    assert calls[("a", "b")]["context"] == "scip"
+    assert calls[("a", "c")]["confidence"] == "AMBIGUOUS"    # demoted — kept, not deleted
+    assert calls[("a", "c")]["metadata"]["demoted_by"] == "scip"
+    assert out["reconciliation"]["demoted"] == 1
+
+
+def test_strict_scip_drops_contradicted_call():
+    base, scip = _collision_case()
+    out = reconcile_scip(base, scip, strict=True)
+    keys = {(e["source"], e["target"]) for e in out["edges"] if e["relation"] == "calls"}
+    assert ("a", "b") in keys        # SCIP-confirmed kept
+    assert ("a", "c") not in keys    # contradicted collision dropped under strict
+    assert out["reconciliation"]["dropped_strict"] == 1
 
 
 # --- keep-as-new / never-guess behavior ---

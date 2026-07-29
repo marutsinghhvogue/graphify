@@ -3002,13 +3002,14 @@ def main() -> None:
         # implements supersede tree-sitter's heuristic edges on identical endpoints;
         # SCIP-only symbols (e.g. interface methods) are added as new nodes.
         if len(sys.argv) < 3:
-            print("Usage: graphify merge-scip <index.scip> [--graph graph.json] [--out path] [--force]",
+            print("Usage: graphify merge-scip <index.scip> [--graph graph.json] [--out path] [--force] [--strict-scip]",
                   file=sys.stderr)
             sys.exit(1)
         scip_path = Path(sys.argv[2])
         graph_path = _default_graph_path()
         out_path: str | None = None
         force = False
+        strict_scip = False
         args = sys.argv[3:]
         i = 0
         while i < len(args):
@@ -3022,6 +3023,8 @@ def main() -> None:
                 out_path = args[i].split("=", 1)[1]; i += 1
             elif args[i] == "--force":
                 force = True; i += 1
+            elif args[i] == "--strict-scip":
+                strict_scip = True; i += 1
             else:
                 i += 1
         if not scip_path.exists():
@@ -3051,7 +3054,7 @@ def main() -> None:
         except Exception as exc:
             print(f"error: could not read SCIP index: {exc}", file=sys.stderr)
             sys.exit(1)
-        merged = reconcile_scip(raw, scip)
+        merged = reconcile_scip(raw, scip, strict=strict_scip)
         errs = validate_extraction(merged)
         if errs:
             print(f"warning: {len(errs)} validation issue(s) after merge; first: {errs[0]}",
@@ -3064,11 +3067,14 @@ def main() -> None:
             print("Refused to overwrite (node count dropped). Pass --force to override.",
                   file=sys.stderr)
             sys.exit(1)
+        _demote = (f"dropped {stats.get('dropped_strict', 0)} (strict)" if strict_scip
+                   else f"demoted {stats.get('demoted', 0)} to AMBIGUOUS")
         print(
             f"Merged SCIP index into {out}\n"
             f"  SCIP nodes {stats['scip_nodes']}: matched {stats['matched']}, "
             f"scip-only {stats['scip_only_new']}, ambiguous-kept {stats['ambiguous_kept_new']}, "
             f"external {stats['external']}\n"
+            f"  per-caller contradicted calls: {_demote}\n"
             f"  graph now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
     elif cmd == "export-pg":

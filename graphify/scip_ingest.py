@@ -655,11 +655,18 @@ def _parse_line(source_location: object) -> int | None:
     return None
 
 
+# tree-sitter relations SCIP resolves precisely and can contradict (name-matched,
+# collision-prone). Structural edges (contains/imports/definitions) are ~100% and
+# never demoted.
+_DEMOTABLE_RELATIONS = frozenset({"calls", "references"})
+
+
 def reconcile_scip(
     base: dict[str, Any],
     scip: dict[str, Any],
     *,
     line_offset: int = SCIP_LINE_OFFSET,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Merge a SCIP extraction into a tree-sitter extraction on node identity.
 
@@ -674,6 +681,15 @@ def reconcile_scip(
     Edges are merged with precedence: a SCIP edge (type-resolved, ``context:
     "scip"``) supersedes a base edge on the same ``(source, target, relation)``;
     base edges SCIP did not reproduce (e.g. dynamic calls) are preserved.
+
+    **Per-caller demote (recall-safety).** When SCIP resolved a caller's
+    calls/references, its tree-sitter ``calls``/``references`` edges that SCIP did
+    NOT confirm are the collision-prone ones (e.g. name-matched ``User.save`` vs
+    ``Logger.save``). By default they are **demoted** — retagged
+    ``confidence="AMBIGUOUS"`` with ``metadata.demoted_by="scip"`` — never
+    deleted: precision consumers filter to EXTRACTED, recall consumers (blast
+    radius) keep them. ``strict=True`` hard-drops them instead. Base edges from
+    callers SCIP said nothing about are left untouched.
 
     Returns ``{"nodes", "edges", "reconciliation": {...stats}}``. ``base`` node
     dicts are mutated in place (kind/metadata stamped).
@@ -751,23 +767,61 @@ def reconcile_scip(
     merged: dict[tuple, dict] = {}
     for e in base_edges:
         merged[(e.get("source"), e.get("target"), e.get("relation"))] = e
+
+    # Callers SCIP actually resolved (source of a remapped SCIP call/reference) and
+    # the exact edges it confirmed — used for the per-caller demote below.
+    scip_resolved_callers: set = set()
+    scip_confirmed: set = set()
+    remapped_scip: list[dict] = []
     for e in scip_edges:
         e = dict(e)
         e["source"] = id_map.get(e.get("source"), e.get("source"))
         e["target"] = id_map.get(e.get("target"), e.get("target"))
+        remapped_scip.append(e)
+        if e.get("relation") in _DEMOTABLE_RELATIONS:
+            scip_resolved_callers.add(e.get("source"))
+            scip_confirmed.add((e.get("source"), e.get("target"), e.get("relation")))
+    for e in remapped_scip:
         k = (e.get("source"), e.get("target"), e.get("relation"))
         cur = merged.get(k)
         if cur is None or _prec(e) >= _prec(cur):
             merged[k] = e
 
+    # Per-caller demote: a base call/reference from a caller SCIP resolved, that
+    # SCIP did not confirm, is a probable name collision. Demote (keep, retag
+    # AMBIGUOUS) by default; drop only under strict.
+    demoted = dropped = 0
+    out_edges: list[dict] = []
+    for k, e in merged.items():
+        contradicted = (
+            e.get("context") != "scip"
+            and e.get("relation") in _DEMOTABLE_RELATIONS
+            and e.get("source") in scip_resolved_callers
+            and k not in scip_confirmed
+        )
+        if not contradicted:
+            out_edges.append(e)
+            continue
+        if strict:
+            dropped += 1
+            continue
+        e = dict(e)
+        e["confidence"] = "AMBIGUOUS"
+        meta = e.get("metadata")
+        e["metadata"] = {**meta, "demoted_by": "scip"} if isinstance(meta, dict) else {"demoted_by": "scip"}
+        out_edges.append(e)
+        demoted += 1
+
     return {
         "nodes": base_nodes + scip_only,
-        "edges": list(merged.values()),
+        "edges": out_edges,
         "reconciliation": {
             "scip_nodes": len(scip_nodes),
             "matched": matched,
             "scip_only_new": unmatched,
             "ambiguous_kept_new": ambiguous,
             "external": external,
+            "demoted": demoted,
+            "dropped_strict": dropped,
         },
     }
