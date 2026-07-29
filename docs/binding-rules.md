@@ -70,21 +70,26 @@ in `affected.DEFAULT_AFFECTED_RELATIONS`, `blast_radius` traverses it. `triggers
 | event | Spring | `@EventListener` | `consumes` |
 | event | Kafka | `@KafkaListener` | `consumes` |
 | event | NestJS | `@EventPattern` / `@MessagePattern` | `consumes` |
-| di | Spring | `@Autowired` | `injects` |
+| di | Spring | `@Autowired` (field/setter) | `injects` |
 | di | JSR-330 | `@Inject` | `injects` |
 | di | Jakarta | `@Resource` | `injects` |
+| di | NestJS | constructor injection (typed params, `@Inject` tokens) | `injects` |
 
 # Resolution modes
 
 - **`next_def`** — the construct annotates the method below it (schedulers,
   events). The bound handler is that def; the edge is **EXTRACTED**.
-- **`inject`** — dependency injection: the annotated member's *enclosing class*
-  depends on the *injected type*. Emits `class --injects--> Type`. The class
-  folds onto its AST node; the type-name target is resolved to an AST node by
-  name when exactly one matches (else kept raw). Name-resolved → **INFERRED**;
-  SCIP upgrades the target to a type-exact node when a SCIP index is present.
-  `blast_radius` then answers "changing this type affects the classes that
-  inject it."
+- **`inject`** — dependency injection (annotated field/setter): the annotated
+  member's *enclosing class* depends on the *injected type*. Emits `class
+  --injects--> Type`. The class folds onto its AST node; the type-name target is
+  resolved to an AST node by name when exactly one matches (else kept raw).
+  Name-resolved → **INFERRED**; SCIP upgrades the target to a type-exact node.
+- **`inject_ctor`** — constructor injection (NestJS/TS): each typed constructor
+  parameter (including `@Inject(TOKEN)` params) is an injected dependency of the
+  class. Emits `class --injects--> ParamType` per param.
+
+`blast_radius` then answers "changing this type affects the classes that inject
+it."
 
 # Extending
 

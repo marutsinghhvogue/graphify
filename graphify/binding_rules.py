@@ -53,8 +53,14 @@ _LANG_BY_SUFFIX = {".py": "python", ".java": "java", ".ts": "ts", ".tsx": "ts"}
 _PAREN = re.compile(r"\(([^)]*)\)")
 
 VALID_LANGS = frozenset(_DEFS)
-VALID_RESOLUTIONS = frozenset({"next_def", "inject"})
+VALID_RESOLUTIONS = frozenset({"next_def", "inject", "inject_ctor"})
 VALID_CONFIDENCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
+
+# Constructor-parameter injection (NestJS/TS): `constructor(private readonly x:
+# FooService, @Inject(TOK) private y: Bar)` — each typed param is an injected
+# dependency of the enclosing class.
+_CTOR_OPEN = re.compile(r"\bconstructor\s*\(")
+_TS_PARAM_TYPE = re.compile(r":\s*([A-Z]\w+)")
 
 # Enclosing type declaration, for the 'inject' resolution (DI: the annotated
 # member belongs to a class, and the edge runs from that class to the injected
@@ -110,6 +116,49 @@ def injected_type(lines: list[str], idx: int, lang: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def class_at_or_after(lines: list[str], idx: int, lang: str) -> tuple[str | None, int | None]:
+    """Name + line of the first class declaration at/just below ``idx`` — the class
+    a decorator like ``@Injectable`` sits on."""
+    pat = _CLASS_DECL.get(lang)
+    if pat is None:
+        return None, None
+    for j in range(idx, min(idx + 4, len(lines))):
+        m = pat.match(lines[j])
+        if m:
+            return m.group(1), j
+    return None, None
+
+
+def constructor_param_types(lines: list[str], cls_line: int, lang: str) -> list[str]:
+    """Injected types from a TS/NestJS constructor's parameter list — the
+    Capitalized type of each ``name: Type`` param (dedup, in order)."""
+    if lang != "ts":
+        return []
+    n = len(lines)
+    for j in range(cls_line, n):
+        if not _CTOR_OPEN.search(lines[j]):
+            continue
+        # accumulate the parameter list until parentheses balance
+        buf, depth, started = [], 0, False
+        for k in range(j, min(j + 40, n)):
+            buf.append(lines[k])
+            depth += lines[k].count("(") - lines[k].count(")")
+            if lines[k].count("("):
+                started = True
+            if started and depth <= 0:
+                break
+        params = " ".join(buf)
+        params = params[params.find("(") + 1: params.rfind(")")]
+        seen, out = set(), []
+        for m in _TS_PARAM_TYPE.finditer(params):
+            t = m.group(1)
+            if t not in seen:
+                seen.add(t)
+                out.append(t)
+        return out
+    return []
 
 
 def paren_content(line: str) -> str:
@@ -269,6 +318,10 @@ BUILTIN_RULES: tuple[BindingRule, ...] = (
                 r"^\s*@Resource\b", "injects", "class",
                 resolution="inject", confidence="INFERRED",
                 description="Jakarta @Resource injection"),
+    BindingRule("di.nestjs.constructor", "di", "nestjs", ("ts",),
+                r"^\s*@(?:Injectable|Controller)\b", "injects", "class",
+                resolution="inject_ctor", confidence="INFERRED",
+                description="NestJS constructor injection (typed params, incl. @Inject tokens)"),
 )
 
 
@@ -378,6 +431,8 @@ def run_bindings(
                     continue
                 if r.resolution == "inject":
                     emitted = _emit_inject(r, lines, i, f, service, nodes, edges)
+                elif r.resolution == "inject_ctor":
+                    emitted = _emit_inject_ctor(r, lines, i, f, service, nodes, edges)
                 else:
                     emitted = _emit_next_def(r, lines, i, f, service, nodes, edges)
                 if not emitted:
@@ -450,4 +505,31 @@ def _emit_inject(r, lines, i, f, service, nodes, edges) -> bool:
         "context": r.category,
         "metadata": {"provider": r.provider, "injected_type": inj_type, "rule": r.id},
     })
+    return True
+
+
+def _emit_inject_ctor(r, lines, i, f, service, nodes, edges) -> bool:
+    """Constructor injection (NestJS/TS): the decorated class depends on each typed
+    constructor parameter. Emits the class node + an `injects` edge per param type."""
+    lang = detect_lang(f)
+    cls_name, cls_line = class_at_or_after(lines, i, lang)
+    if not cls_name or cls_line is None:
+        return False
+    types = constructor_param_types(lines, cls_line, lang)
+    if not types:
+        return False
+    cid = f"svc_{_sanitize_id(service)}_cls_{_sanitize_id(cls_name)}"
+    nodes.setdefault(cid, {
+        "id": cid, "label": cls_name, "file_type": "code", "kind": "class",
+        "source_file": str(f), "source_location": f"L{cls_line + 1}",
+        "metadata": {"service": service},
+    })
+    for t in types:
+        edges.append({
+            "source": cid, "target": t, "relation": r.relation,
+            "confidence": r.confidence, "confidence_score": _confidence_score(r.confidence),
+            "source_file": str(f), "source_location": f"L{cls_line + 1}",
+            "context": r.category,
+            "metadata": {"provider": r.provider, "injected_type": t, "rule": r.id},
+        })
     return True

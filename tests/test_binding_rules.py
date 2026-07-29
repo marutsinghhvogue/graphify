@@ -199,6 +199,44 @@ def test_di_reconcile_resolves_type_target_by_name(tmp_path):
     assert inj["target"] == "ast_inventory_client"
 
 
+def test_di_nestjs_constructor_injection(tmp_path):
+    """R2: NestJS constructor injection — each typed param (incl. @Inject token
+    params) is an `injects` dependency of the class."""
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    _write(svc, "orders.service.ts",
+           "import { Injectable, Inject } from '@nestjs/common';\n\n"
+           "@Injectable()\n"
+           "export class OrdersService {\n"
+           "  constructor(\n"
+           "    private readonly inventory: InventoryClient,\n"
+           "    @Inject('PRICING') private pricing: PricingService,\n"
+           "  ) {}\n"
+           "}\n")
+    g = run_bindings(tmp_path, categories=["di"])
+    assert g["stats"]["by_provider"] == {"nestjs": 1}
+    targets = {e["target"] for e in g["edges"] if e["relation"] == "injects"}
+    assert targets == {"InventoryClient", "PricingService"}
+    src = {e["source"] for e in g["edges"] if e["relation"] == "injects"}
+    assert src == {"svc_svc_cls_ordersservice"}
+
+
+def test_di_constructor_targets_reconcile_onto_ast(tmp_path):
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    _write(svc, "orders.service.ts",
+           "@Injectable()\nexport class OrdersService {\n"
+           "  constructor(private readonly inv: InventoryClient) {}\n}\n")
+    raw = run_bindings(tmp_path, categories=["di"])
+    base = {"nodes": [
+        {"id": "ast_inv", "label": "InventoryClient",
+         "source_file": str(svc / "inventory.client.ts"), "source_location": "L1"},
+    ], "edges": []}
+    out = reconcile_contract(base, raw)
+    inj = [e for e in out["edges"] if e["relation"] == "injects"]
+    assert inj and inj[0]["target"] == "ast_inv"       # resolved onto the provider's node
+
+
 def test_di_unresolved_type_target_kept_raw(tmp_path):
     svc = tmp_path / "svc"
     svc.mkdir()
