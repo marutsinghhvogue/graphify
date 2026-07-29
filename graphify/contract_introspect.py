@@ -339,9 +339,12 @@ def _path_suffix_match(a: str, b: str) -> bool:
 # Emitted node kinds that have a tree-sitter AST twin (fold onto it). Synthetic
 # construct nodes (route/schedule/event/topic) do not — they are kept as new.
 _FOLDABLE_KINDS = {"function", "class"}
-# Edge relations whose target is a raw *type name* (not an emitted node id) and so
-# is resolved against AST nodes by name — dependency injection.
-_TYPE_TARGET_RELATIONS = {"injects"}
+# Edge relations whose target is a raw *name* (not an emitted node id) and so is
+# resolved against AST nodes by name: dependency injection (a type name) and
+# cloud-scheduler triggers (a Lambda handler function name). In-code `triggers`
+# targets are already emitted fn-node ids and resolve via id_map first, so adding
+# `triggers` here only affects the raw-name (cloud) case.
+_TYPE_TARGET_RELATIONS = {"injects", "triggers"}
 
 
 def reconcile_contract(base: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:

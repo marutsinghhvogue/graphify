@@ -5138,16 +5138,22 @@ def main() -> None:
         cloud_result: dict = {"nodes": [], "edges": []}
         if cli_cloud_schedulers:
             from graphify.cloud_schedule_introspect import cloud_schedule_graph
+            from graphify.contract_introspect import reconcile_contract
             print("[graphify extract] detecting cloud/IaC schedulers...")
             try:
-                cloud_result = cloud_schedule_graph(target)
+                cloud_raw = cloud_schedule_graph(target)
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(1)
-            _cl = cloud_result.get("stats", {})
+            _cl = cloud_raw.get("stats", {})
+            # Resolve `triggers` handler targets (Lambda func names) onto the AST
+            # nodes so blast radius crosses infra→code.
+            cloud_result = reconcile_contract(ast_result, cloud_raw)
+            _resolved = cloud_result.get("reconciliation", {}).get("type_targets_resolved", 0)
             _clby = ", ".join(f"{k}={v}" for k, v in sorted(_cl.get("by_provider", {}).items()))
             print(f"[graphify extract] cloud schedulers: {_cl.get('schedules', 0)} found"
-                  + (f" ({_clby})" if _clby else ""))
+                  + (f" ({_clby})" if _clby else "")
+                  + f"; {_cl.get('resolved', 0)} handler-linked, {_resolved} resolved onto AST nodes")
 
         # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result + bind_result + cloud_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels

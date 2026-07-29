@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from graphify.cloud_schedule_introspect import cloud_schedule_graph
+from graphify.contract_introspect import reconcile_contract
 from graphify.validate import validate_extraction
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cloudsched"
@@ -28,11 +29,40 @@ def test_schedule_nodes_are_inferred_with_cron_expr():
     assert all(e["confidence"] == "INFERRED" for e in edges)
 
 
-def test_serverless_links_the_named_handler():
+def test_eventbridge_resolves_lambda_handler_via_reference_chain():
+    """R1: rule → event_target → aws_lambda_function.handler is followed so the
+    schedule's `triggers` edge targets the handler function (not a raw hint)."""
     g = cloud_schedule_graph(FIXTURE)
-    trig = [e for e in g["edges"] if e["relation"] == "triggers"]
-    assert len(trig) == 1
-    assert trig[0]["target"] == "src/jobs.rollup_daily"   # handler it names
+    aws = [e for e in g["edges"]
+           if e["relation"] == "triggers" and e["metadata"]["provider"] == "aws"]
+    assert len(aws) == 1
+    assert aws[0]["target"] == "rollup_daily"                 # func from "jobs.rollup_daily"
+    assert aws[0]["metadata"]["handler"] == "jobs.rollup_daily"
+    assert aws[0]["metadata"]["resolved"] is True
+
+
+def test_serverless_links_the_named_handler_function():
+    g = cloud_schedule_graph(FIXTURE)
+    sl = [e for e in g["edges"]
+          if e["relation"] == "triggers" and e["metadata"]["provider"] == "serverless"]
+    assert len(sl) == 1
+    assert sl[0]["target"] == "rollup_daily"                  # bare func, resolvable
+    assert sl[0]["metadata"]["handler"] == "src/jobs.rollup_daily"
+
+
+def test_cloud_triggers_resolve_onto_ast_nodes():
+    """R1 payoff: reconcile resolves the cloud handler targets onto real AST nodes,
+    so blast_radius crosses infra→code."""
+    g = cloud_schedule_graph(FIXTURE)
+    base = {"nodes": [
+        {"id": "ast_rollup_daily", "label": "rollup_daily()",
+         "source_file": "infra/jobs.py", "source_location": "L1"},
+    ], "edges": []}
+    out = reconcile_contract(base, g)
+    linked = [e for e in out["edges"]
+              if e["relation"] == "triggers" and e["target"] == "ast_rollup_daily"]
+    assert linked, "cloud schedule should link onto the AST handler node"
+    assert out["reconciliation"]["type_targets_resolved"] >= 1
 
 
 def test_output_is_valid_extraction():
