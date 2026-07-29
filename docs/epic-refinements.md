@@ -2,8 +2,13 @@
 title: "EPIC — Precision & Scale Refinements"
 subtitle: "The remaining tail after the PRD→plan pipeline landed end-to-end"
 date: "July 2026"
-status: open
+status: in-progress
 ---
+
+> **Progress:** R1 ✅, R2 ✅, R3 ✅ built & pushed; R5 ◑ partial (broader Java
+> consumer harvest + Feign near-exact done; field/schema-level nodes deferred).
+> R4 (large, needs a live multi-repo pgvector DB to verify) and R6 (needs
+> read-only cloud credentials) are held pending environment.
 
 # Context
 
@@ -25,7 +30,7 @@ value-to-effort.
 
 # Refinements
 
-## R1 — Cross-resource cloud target resolution
+## R1 — Cross-resource cloud target resolution  · ✅ DONE
 **Area:** schedulers (Tier B) · **Confidence impact:** INFERRED → higher recall
 Tier-B cloud schedules currently emit `triggers` edges to a raw target hint;
 EventBridge→Lambda and k8s-container targets are opaque. Resolve them via the
@@ -37,7 +42,7 @@ IaC reference graph so blast radius crosses infra→code.
   resolves onto the Lambda handler's AST node; blast_radius(handler) surfaces the
   cloud schedule.
 
-## R2 — DI: constructor & token injection, non-Java
+## R2 — DI: constructor & token injection, non-Java  · ✅ DONE
 **Area:** binding engine (`inject` resolution) · **Effort:** small–medium
 The `inject` resolution covers Java field/setter injection today. Extend the same
 mode to constructor-parameter injection (Spring, NestJS `constructor(private x:
@@ -46,7 +51,7 @@ Foo)`) and token injection (`@Inject('TOKEN')`), plus Python/TS DI frameworks.
   constructor-injected bean each emit an `injects` edge resolved onto the
   provider's node.
 
-## R3 — Per-caller demote before persist (recall-safety)
+## R3 — Per-caller demote before persist (recall-safety)  · ✅ DONE
 **Area:** SCIP / reconciliation · **Policy:** demote-not-delete
 Implement the designed retag: where SCIP resolved a caller, contradicted
 tree-sitter `calls` edges for *that caller* are retagged AMBIGUOUS (low
@@ -55,7 +60,7 @@ consumers (blast radius) keep them. Hard delete only behind `--strict-scip`.
 - **Acceptance:** a same-named-method collision (`User.save` vs `Logger.save`)
   keeps both edges post-merge, the SCIP-contradicted one tagged AMBIGUOUS.
 
-## R4 — Cross-repo estate rollup over Postgres
+## R4 — Cross-repo estate rollup over Postgres  · ⏸ HELD (needs live multi-repo pgvector DB)
 **Area:** Postgres query layer · **Scale**
 Today a `graph.json` (and its cross-service/reconcile step) is per-extraction.
 Persist multiple repos into one Postgres and resolve cross-service / DI targets
@@ -66,7 +71,7 @@ Persist multiple repos into one Postgres and resolve cross-service / DI targets
 - **Acceptance:** two exported repos where a cross-service call in repo A reaches
   a handler in repo B via a single `blast_radius_pg` query.
 
-## R5 — Contract cross-service: field/schema granularity + broader harvest
+## R5 — Contract cross-service: field/schema granularity + broader harvest  · ◑ PARTIAL (Feign/RestTemplate harvest done; field-level deferred)
 **Area:** cross-service · **Precision**
 `contract_introspect` matches at endpoint granularity. Add field/schema-level
 nodes so "which contract change breaks whom" is answerable below the endpoint,
@@ -75,7 +80,7 @@ Faraday) and producer coverage (Django REST, Express, gin, Rails).
 - **Acceptance:** a request/response field node links producer↔consumer; a Feign
   `@FeignClient(name=...)` call resolves near-exact to the target service.
 
-## R6 — Live cloud-API scheduler tier (ClickOps)
+## R6 — Live cloud-API scheduler tier (ClickOps)  · ⏸ HELD (needs cloud read creds)
 **Area:** schedulers (Tier B+) · **Optional, credentialed**
 Schedules created in the console / via CLI exist only in the running account and
 are invisible to static scans. A live-introspection tier — mirroring
