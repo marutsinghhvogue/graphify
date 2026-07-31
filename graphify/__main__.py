@@ -2218,18 +2218,21 @@ def main() -> None:
         print("    --force                 allow overwrite even if node count drops")
         print("  seeds \"<text>\" [graph]  Stage 2: prose requirement -> ranked code symbols it touches")
         print("                          (BM25 over names/paths/docs); --embed openai|gemini for hybrid")
+        print("  init-pg                 create graphify's schema + tables (no data) on a shared DB")
+        print("                          --schema graphify [--dim 1536] [--dsn D]  (isolates from other apps)")
         print("  export-chunks [graph]   embed symbols + persist code_chunks (pgvector+FTS) to Postgres")
-        print("                          --repo R [--embed hashing|openai|gemini] [--dsn D]")
+        print("                          --repo R [--embed hashing|openai|gemini] [--schema S] [--dsn D]")
         print("  blast-radius <symbol>   Stage 3 at scale: reverse-reachability over persisted")
-        print("                          code_edges (recursive CTE) --repo R [--depth N] [--dsn D]")
+        print("                          code_edges (recursive CTE) --repo R [--depth N] [--schema S] [--dsn D]")
         print("  search-chunks \"<text>\"  hybrid seed search over persisted code_chunks (pgvector+FTS)")
-        print("                          --repo R [--embed E] [--top N] [--dsn D]")
+        print("                          --repo R [--embed E] [--top N] [--schema S] [--dsn D]")
         print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
         print("                          no rule yet (schedulers/events); --write persists them to")
         print("                          .graphify_binding_rules.json for deterministic --bindings runs")
         print("  export-pg [graph.json]  persist nodes/edges into Postgres (symbols + code_edges)")
         print("    --repo <name>           repo/service name (required)")
         print("    --source <label>        edge provenance / replace-scope (default: graphify)")
+        print("    --schema <name>         Postgres schema for graphify's tables (default: public)")
         print("    --dsn <dsn>             Postgres DSN (default: PG* env vars)")
         print("    --branch <branch>       checkout a specific branch (default: repo default)")
         print("    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)")
@@ -3085,11 +3088,12 @@ def main() -> None:
         repo: str | None = None
         source = "graphify"
         dsn: str | None = None
+        schema = "public"
         args = sys.argv[2:]
         i = 0
         while i < len(args):
             a = args[i]
-            if a in ("--repo", "--source", "--dsn", "--graph") and i + 1 < len(args):
+            if a in ("--repo", "--source", "--dsn", "--schema", "--graph") and i + 1 < len(args):
                 val = args[i + 1]
                 if a == "--repo":
                     repo = val
@@ -3097,10 +3101,12 @@ def main() -> None:
                     source = val
                 elif a == "--dsn":
                     dsn = val
+                elif a == "--schema":
+                    schema = val
                 else:
                     graph_path = val
                 i += 2
-            elif a.startswith(("--repo=", "--source=", "--dsn=", "--graph=")):
+            elif a.startswith(("--repo=", "--source=", "--dsn=", "--schema=", "--graph=")):
                 key, val = a.split("=", 1)
                 if key == "--repo":
                     repo = val
@@ -3108,6 +3114,8 @@ def main() -> None:
                     source = val
                 elif key == "--dsn":
                     dsn = val
+                elif key == "--schema":
+                    schema = val
                 else:
                     graph_path = val
                 i += 1
@@ -3126,12 +3134,39 @@ def main() -> None:
         raw = json.loads(gp.read_text(encoding="utf-8"))
         from graphify.pg_export import export_to_postgres
         try:
-            counts = export_to_postgres(raw, repo=repo, source=source, dsn=dsn)
-        except (ImportError, ConnectionError) as exc:
+            counts = export_to_postgres(raw, repo=repo, source=source, dsn=dsn, schema=schema)
+        except (ImportError, ConnectionError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
-        print(f"Exported to Postgres (repo={repo}, source={source}): "
+        print(f"Exported to Postgres (repo={repo}, source={source}, schema={schema}): "
               f"{counts['symbols']} symbols, {counts['edges']} edges")
+    elif cmd == "init-pg":
+        # graphify init-pg [--schema graphify] [--dim 1536] [--dsn D]
+        # Create graphify's schema + tables (symbols, code_edges, and code_chunks
+        # at --dim) without any data — provisions a dedicated schema on a shared DB.
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify init-pg")
+        p.add_argument("--schema", default="graphify")
+        p.add_argument("--dim", type=int, default=None,
+                       help="embedding dimension for code_chunks (e.g. 1536 openai, 768 gemini, 256 hashing)")
+        p.add_argument("--dsn", default=None)
+        ns = p.parse_args(sys.argv[2:])
+        from graphify.pg_export import init_postgres
+        try:
+            info = init_postgres(schema=ns.schema, dsn=ns.dsn)
+            created = "symbols, code_edges"
+            if ns.dim:
+                from graphify.pg_chunks import _connect, schema_sql
+                conn = _connect(ns.dsn)
+                with conn, conn.cursor() as cur:
+                    cur.execute(schema_sql(ns.dim, ns.schema))
+                conn.close()
+                created += f", code_chunks(vector({ns.dim}))"
+        except (ImportError, ConnectionError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Initialized schema '{info['schema']}': {created}.")
     elif cmd == "learn-bindings":
         # graphify learn-bindings [path] [--backend B] [--model M] [--write]
         # LLM proposes binding rules for framework constructs graphify has no rule
@@ -3240,6 +3275,7 @@ def main() -> None:
         p.add_argument("--repo", required=True)
         p.add_argument("--embed", default="hashing")
         p.add_argument("--dsn", default=None)
+        p.add_argument("--schema", default="public")
         ns = p.parse_args(sys.argv[2:])
         gp = Path(ns.graph).resolve() if ns.graph else _default_graph_path()
         gp = Path(gp)
@@ -3257,11 +3293,13 @@ def main() -> None:
             embedder = get_embedder(ns.embed)
             print(f"[graphify export-chunks] embedding {len(chunks)} chunks via {ns.embed}...")
             embeddings = embedder.embed([c.text for c in chunks])
-            counts = export_chunks_to_postgres(chunks, embeddings, repo=ns.repo, dsn=ns.dsn)
+            counts = export_chunks_to_postgres(chunks, embeddings, repo=ns.repo,
+                                               dsn=ns.dsn, schema=ns.schema)
         except (ValueError, ImportError, ConnectionError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
-        print(f"Persisted {counts['chunks']} code_chunks (repo={ns.repo}, embedder={ns.embed}).")
+        print(f"Persisted {counts['chunks']} code_chunks "
+              f"(repo={ns.repo}, schema={ns.schema}, embedder={ns.embed}).")
     elif cmd == "blast-radius":
         # graphify blast-radius <seed_symbol> --repo R [--depth N] [--dsn D]
         # Bounded reverse-reachability over persisted code_edges (recursive CTE).
@@ -3272,10 +3310,11 @@ def main() -> None:
         p.add_argument("--repo", required=True)
         p.add_argument("--depth", type=int, default=3)
         p.add_argument("--dsn", default=None)
+        p.add_argument("--schema", default="public")
         ns = p.parse_args(sys.argv[2:])
         from graphify.pg_query import blast_radius_pg
         try:
-            rows = blast_radius_pg(ns.repo, ns.seed, depth=ns.depth, dsn=ns.dsn)
+            rows = blast_radius_pg(ns.repo, ns.seed, depth=ns.depth, dsn=ns.dsn, schema=ns.schema)
         except (ImportError, ConnectionError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -3296,13 +3335,14 @@ def main() -> None:
         p.add_argument("--embed", default="hashing")
         p.add_argument("--top", type=int, default=10)
         p.add_argument("--dsn", default=None)
+        p.add_argument("--schema", default="public")
         ns = p.parse_args(sys.argv[2:])
         from graphify.pg_query import discover_seeds_pg
         from graphify.semantic_index import get_embedder
         try:
             embedder = get_embedder(ns.embed)
             hits = discover_seeds_pg(ns.query, repo=ns.repo, embedder=embedder,
-                                     dsn=ns.dsn, top_n=ns.top)
+                                     dsn=ns.dsn, top_n=ns.top, schema=ns.schema)
         except (ImportError, ConnectionError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)

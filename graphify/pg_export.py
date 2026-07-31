@@ -33,12 +33,30 @@ stays importable without it.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
-# Structural core schema (no pgvector dependency — embeddings live in
-# code_chunks, created/managed by the semantic pipeline). Idempotent.
-CORE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS symbols (
+# A Postgres schema name. Validated (identifiers can't be parameterized with %s),
+# so a --schema value can't inject SQL. Lets graphify's tables live in a dedicated
+# schema (e.g. `graphify`) on a shared database without colliding with other apps.
+_SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def safe_schema(schema: str | None) -> str:
+    s = (schema or "public").strip()
+    if not _SCHEMA_RE.fullmatch(s):
+        raise ValueError(f"invalid schema name {schema!r}; must match [a-z_][a-z0-9_]* (lowercase)")
+    return s
+
+
+def core_schema_sql(schema: str = "public") -> str:
+    """Structural core DDL in ``schema``. Idempotent; no pgvector dependency
+    (embeddings live in code_chunks, owned by the semantic pipeline)."""
+    s = safe_schema(schema)
+    return f"""
+CREATE SCHEMA IF NOT EXISTS {s};
+
+CREATE TABLE IF NOT EXISTS {s}.symbols (
     repo         text NOT NULL,
     symbol_id    text NOT NULL,
     path         text,
@@ -49,7 +67,7 @@ CREATE TABLE IF NOT EXISTS symbols (
     PRIMARY KEY (repo, symbol_id)
 );
 
-CREATE TABLE IF NOT EXISTS code_edges (
+CREATE TABLE IF NOT EXISTS {s}.code_edges (
     id                bigserial PRIMARY KEY,
     repo              text NOT NULL,
     src_symbol        text NOT NULL,
@@ -63,24 +81,28 @@ CREATE TABLE IF NOT EXISTS code_edges (
     source_location   text
 );
 
-CREATE INDEX IF NOT EXISTS code_edges_dst_idx ON code_edges (repo, dst_symbol, edge_type);
-CREATE INDEX IF NOT EXISTS code_edges_src_idx ON code_edges (repo, src_symbol, edge_type);
-CREATE INDEX IF NOT EXISTS code_edges_repo_source_idx ON code_edges (repo, source);
+CREATE INDEX IF NOT EXISTS code_edges_dst_idx ON {s}.code_edges (repo, dst_symbol, edge_type);
+CREATE INDEX IF NOT EXISTS code_edges_src_idx ON {s}.code_edges (repo, src_symbol, edge_type);
+CREATE INDEX IF NOT EXISTS code_edges_repo_source_idx ON {s}.code_edges (repo, source);
 """
 
-_SYMBOL_UPSERT = """
-INSERT INTO symbols (repo, symbol_id, path, name, kind, source_line, scip_symbol)
+
+def _symbol_upsert(schema: str) -> str:
+    return f"""
+INSERT INTO {schema}.symbols (repo, symbol_id, path, name, kind, source_line, scip_symbol)
 VALUES (%s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (repo, symbol_id) DO UPDATE SET
     path        = EXCLUDED.path,
     name        = EXCLUDED.name,
-    kind        = COALESCE(EXCLUDED.kind, symbols.kind),
-    source_line = COALESCE(EXCLUDED.source_line, symbols.source_line),
-    scip_symbol = COALESCE(EXCLUDED.scip_symbol, symbols.scip_symbol)
+    kind        = COALESCE(EXCLUDED.kind, {schema}.symbols.kind),
+    source_line = COALESCE(EXCLUDED.source_line, {schema}.symbols.source_line),
+    scip_symbol = COALESCE(EXCLUDED.scip_symbol, {schema}.symbols.scip_symbol)
 """
 
-_EDGE_INSERT = """
-INSERT INTO code_edges
+
+def _edge_insert(schema: str) -> str:
+    return f"""
+INSERT INTO {schema}.code_edges
     (repo, src_symbol, edge_type, dst_symbol, target,
      confidence, confidence_score, source, source_file, source_location)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -144,19 +166,7 @@ def extraction_to_rows(
     return symbol_rows, edge_rows
 
 
-def export_to_postgres(
-    extraction: dict[str, Any],
-    *,
-    repo: str,
-    source: str,
-    dsn: str | None = None,
-) -> dict[str, int]:
-    """Write a Graphify extraction into Postgres.
-
-    Upserts ``symbols`` (identity anchor; never clobbers another source's kind/
-    scip_symbol) and replaces ``code_edges`` for this ``(repo, source)`` pair.
-    ``dsn=None`` uses libpq ``PG*`` env vars. Returns counts written.
-    """
+def _connect(dsn: str | None):
     try:
         import psycopg
     except ImportError:  # pragma: no cover - exercised only without the extra
@@ -164,24 +174,50 @@ def export_to_postgres(
             "psycopg is required for pg_export. Install the 'postgres' extra: "
             "pip install 'graphifyy[postgres]'"
         ) from None
-
-    symbol_rows, edge_rows = extraction_to_rows(extraction, repo, source)
-
     try:
-        conn = psycopg.connect(dsn or "")  # empty string = PG* env vars
+        return psycopg.connect(dsn or "")  # empty string = PG* env vars
     except psycopg.OperationalError as exc:
         info = psycopg.conninfo.conninfo_to_dict(dsn or "")
         where = f"{info.get('host', '?')}/{info.get('dbname', '?')}"
         raise ConnectionError(f"could not connect to PostgreSQL ({where}): {exc}") from None
 
+
+def init_postgres(*, schema: str = "public", dsn: str | None = None) -> dict[str, str]:
+    """Create graphify's schema + structural tables (no data). Idempotent — used to
+    provision a dedicated schema on a shared database before any export."""
+    s = safe_schema(schema)
+    conn = _connect(dsn)
+    with conn, conn.cursor() as cur:
+        cur.execute(core_schema_sql(s))
+    conn.close()
+    return {"schema": s, "tables": "symbols, code_edges"}
+
+
+def export_to_postgres(
+    extraction: dict[str, Any],
+    *,
+    repo: str,
+    source: str,
+    dsn: str | None = None,
+    schema: str = "public",
+) -> dict[str, int]:
+    """Write a Graphify extraction into Postgres (in ``schema``, default public).
+
+    Upserts ``symbols`` (identity anchor; never clobbers another source's kind/
+    scip_symbol) and replaces ``code_edges`` for this ``(repo, source)`` pair.
+    ``dsn=None`` uses libpq ``PG*`` env vars. Returns counts written.
+    """
+    s = safe_schema(schema)
+    symbol_rows, edge_rows = extraction_to_rows(extraction, repo, source)
+    conn = _connect(dsn)
     with conn:
         with conn.cursor() as cur:
-            cur.execute(CORE_SCHEMA_SQL)
+            cur.execute(core_schema_sql(s))
             # Replace only this source's edges — leaves other sources intact.
-            cur.execute("DELETE FROM code_edges WHERE repo = %s AND source = %s", (repo, source))
+            cur.execute(f"DELETE FROM {s}.code_edges WHERE repo = %s AND source = %s", (repo, source))
             if symbol_rows:
-                cur.executemany(_SYMBOL_UPSERT, symbol_rows)
+                cur.executemany(_symbol_upsert(s), symbol_rows)
             if edge_rows:
-                cur.executemany(_EDGE_INSERT, edge_rows)
+                cur.executemany(_edge_insert(s), edge_rows)
     conn.close()
     return {"symbols": len(symbol_rows), "edges": len(edge_rows)}

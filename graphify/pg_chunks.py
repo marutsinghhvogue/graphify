@@ -20,16 +20,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from graphify.pg_export import safe_schema
 from graphify.semantic_index import Chunk
 
 
-def schema_sql(dim: int) -> str:
+def schema_sql(dim: int, schema: str = "public") -> str:
     """DDL for ``code_chunks`` at a fixed embedding dimension (pgvector columns
-    are dimensioned at DDL time). Idempotent; requires the ``vector`` extension."""
+    are dimensioned at DDL time), in ``schema``. Idempotent; requires the
+    ``vector`` extension (database-wide, so it works in any schema)."""
+    s = safe_schema(schema)
     return f"""
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE SCHEMA IF NOT EXISTS {s};
 
-CREATE TABLE IF NOT EXISTS code_chunks (
+CREATE TABLE IF NOT EXISTS {s}.code_chunks (
     repo         text NOT NULL,
     symbol_id    text NOT NULL,
     name         text,
@@ -41,8 +45,8 @@ CREATE TABLE IF NOT EXISTS code_chunks (
     PRIMARY KEY (repo, symbol_id)
 );
 
-CREATE INDEX IF NOT EXISTS code_chunks_fts_idx ON code_chunks USING GIN (fts);
-CREATE INDEX IF NOT EXISTS code_chunks_vec_idx ON code_chunks
+CREATE INDEX IF NOT EXISTS code_chunks_fts_idx ON {s}.code_chunks USING GIN (fts);
+CREATE INDEX IF NOT EXISTS code_chunks_vec_idx ON {s}.code_chunks
     USING hnsw (embedding vector_cosine_ops);
 """
 
@@ -69,8 +73,9 @@ def chunk_rows(
     return rows
 
 
-_UPSERT = """
-INSERT INTO code_chunks (repo, symbol_id, name, path, kind, chunk_text, embedding)
+def _upsert_sql(schema: str) -> str:
+    return f"""
+INSERT INTO {schema}.code_chunks (repo, symbol_id, name, path, kind, chunk_text, embedding)
 VALUES (%s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (repo, symbol_id) DO UPDATE SET
     name = EXCLUDED.name, path = EXCLUDED.path, kind = EXCLUDED.kind,
@@ -100,10 +105,12 @@ def export_chunks_to_postgres(
     *,
     repo: str,
     dsn: str | None = None,
+    schema: str = "public",
 ) -> dict[str, int]:
-    """Create ``code_chunks`` (at the embeddings' dimension) and upsert one row per
-    chunk. Upsert (not replace) so a re-embed refreshes in place. ``dsn=None`` uses
-    libpq ``PG*`` env vars. Returns the count written."""
+    """Create ``code_chunks`` (at the embeddings' dimension) in ``schema`` and upsert
+    one row per chunk. Upsert (not replace) so a re-embed refreshes in place.
+    ``dsn=None`` uses libpq ``PG*`` env vars. Returns the count written."""
+    s = safe_schema(schema)
     rows = chunk_rows(chunks, embeddings, repo)
     if not rows:
         return {"chunks": 0}
@@ -111,18 +118,19 @@ def export_chunks_to_postgres(
     conn = _connect(dsn)
     with conn:
         with conn.cursor() as cur:
-            cur.execute(schema_sql(dim))
-            cur.executemany(_UPSERT, rows)
+            cur.execute(schema_sql(dim, s))
+            cur.executemany(_upsert_sql(s), rows)
     conn.close()
     return {"chunks": len(rows)}
 
 
-_SEARCH = """
+def _search_sql(schema: str) -> str:
+    return f"""
 WITH v AS (
     SELECT symbol_id, name, path, kind,
            1 - (embedding <=> %(qvec)s::vector) AS vscore,
            ts_rank(fts, plainto_tsquery('english', %(qtext)s)) AS lscore
-    FROM code_chunks
+    FROM {schema}.code_chunks
     WHERE repo = %(repo)s
 )
 SELECT symbol_id, name, path, kind, vscore, lscore
@@ -139,13 +147,15 @@ def search_chunks_postgres(
     repo: str,
     dsn: str | None = None,
     top_n: int = 10,
+    schema: str = "public",
 ) -> list[dict[str, Any]]:
-    """Hybrid seed search over persisted chunks: pgvector cosine ⊕ FTS rank. The
-    SQL analog of ``retrieve_seeds`` for the embed-once/query-many path."""
+    """Hybrid seed search over persisted chunks (in ``schema``): pgvector cosine ⊕
+    FTS rank. The SQL analog of ``retrieve_seeds`` for the embed-once/query-many path."""
+    s = safe_schema(schema)
     conn = _connect(dsn)
     with conn:
         with conn.cursor() as cur:
-            cur.execute(_SEARCH, {
+            cur.execute(_search_sql(s), {
                 "qvec": _vec_literal(query_embedding), "qtext": query_text,
                 "repo": repo, "top_n": top_n,
             })

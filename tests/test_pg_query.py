@@ -63,6 +63,19 @@ def test_blast_radius_pg_honours_custom_relations():
     assert conn.cur.executed[0][1]["rels"] == ["calls_service"]
 
 
+def test_blast_radius_pg_qualifies_schema_in_sql():
+    conn = _FakeConn([])
+    blast_radius_pg("r", "s", schema="graphify", connect=lambda dsn: conn)
+    sql = conn.cur.executed[0][0]
+    assert "graphify.code_edges" in sql          # schema-qualified table
+
+
+def test_blast_radius_pg_rejects_bad_schema():
+    import pytest
+    with pytest.raises(ValueError):
+        blast_radius_pg("r", "s", schema="evil; DROP TABLE x", connect=lambda dsn: _FakeConn([]))
+
+
 class _FakeEmbedder:
     def embed(self, texts):
         return [[0.1, 0.2, 0.3] for _ in texts]
@@ -70,12 +83,12 @@ class _FakeEmbedder:
 
 def test_discover_seeds_pg_embeds_query_and_delegates():
     seen = {}
-    def fake_search(query, qvec, *, repo, dsn, top_n):
-        seen.update(query=query, qvec=qvec, repo=repo, top_n=top_n)
+    def fake_search(query, qvec, *, repo, dsn, top_n, schema):
+        seen.update(query=query, qvec=qvec, repo=repo, top_n=top_n, schema=schema)
         return [{"symbol_id": "s1", "name": "Foo"}]
     out = discover_seeds_pg("payment flow", repo="r", embedder=_FakeEmbedder(),
-                            top_n=5, search=fake_search)
+                            top_n=5, schema="graphify", search=fake_search)
     assert out == [{"symbol_id": "s1", "name": "Foo"}]
     assert seen["query"] == "payment flow"
     assert seen["qvec"] == [0.1, 0.2, 0.3]   # embedded once, passed through
-    assert seen["repo"] == "r" and seen["top_n"] == 5
+    assert seen["repo"] == "r" and seen["top_n"] == 5 and seen["schema"] == "graphify"

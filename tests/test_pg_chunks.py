@@ -39,3 +39,15 @@ def test_schema_sql_dimensions_the_vector_column():
     assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
     assert "USING hnsw" in sql and "USING GIN" in sql
     assert "PRIMARY KEY (repo, symbol_id)" in sql
+
+
+def test_schema_sql_qualifies_a_named_schema():
+    sql = schema_sql(256, "graphify")
+    assert "CREATE SCHEMA IF NOT EXISTS graphify" in sql
+    assert "graphify.code_chunks" in sql
+    assert "ON graphify.code_chunks" in sql   # indexes qualified too
+
+
+def test_schema_sql_rejects_injection():
+    with pytest.raises(ValueError):
+        schema_sql(256, "public; DROP TABLE users")

@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 from graphify.pg_chunks import search_chunks_postgres
+from graphify.pg_export import safe_schema
 
 # Relations along which impact propagates — the in-process call graph plus every
 # cross-boundary entry-point edge (service / schedule / event / DI).
@@ -31,12 +32,13 @@ DEFAULT_IMPACT_RELATIONS: tuple[str, ...] = (
 # Reverse reachability: from the seed, follow edges whose *target* is already in
 # the impact set, adding their *source* (the dependent). UNION (not UNION ALL)
 # deduplicates, bounding cycles; depth caps the walk.
-_BLAST_SQL = """
+def _blast_sql(schema: str) -> str:
+    return f"""
 WITH RECURSIVE impact(symbol, depth) AS (
         SELECT %(seed)s::text, 0
     UNION
         SELECT e.src_symbol, i.depth + 1
-        FROM code_edges e
+        FROM {schema}.code_edges e
         JOIN impact i ON e.dst_symbol = i.symbol
         WHERE e.repo = %(repo)s
           AND i.depth < %(depth)s
@@ -73,16 +75,18 @@ def blast_radius_pg(
     depth: int = 3,
     relations: list[str] | tuple[str, ...] | None = None,
     dsn: str | None = None,
+    schema: str = "public",
     connect: Callable | None = None,
 ) -> list[dict[str, Any]]:
     """Bounded reverse-reachability blast radius for ``seed_symbol`` in ``repo``,
-    computed in Postgres. Returns ``[{symbol, depth}, ...]`` ordered by depth."""
+    computed in Postgres (``schema``). Returns ``[{symbol, depth}, ...]``."""
+    s = safe_schema(schema)
     rels = list(relations or DEFAULT_IMPACT_RELATIONS)
     conn = (connect or _default_connect)(dsn)
     with conn:
         with conn.cursor() as cur:
-            cur.execute(_BLAST_SQL, {"seed": seed_symbol, "repo": repo,
-                                     "depth": int(depth), "rels": rels})
+            cur.execute(_blast_sql(s), {"seed": seed_symbol, "repo": repo,
+                                        "depth": int(depth), "rels": rels})
             rows = [{"symbol": r[0], "depth": r[1]} for r in cur.fetchall()]
     conn.close()
     return rows
@@ -95,10 +99,12 @@ def discover_seeds_pg(
     embedder,
     dsn: str | None = None,
     top_n: int = 10,
+    schema: str = "public",
     search: Callable | None = None,
 ) -> list[dict[str, Any]]:
-    """Hybrid seed search over persisted ``code_chunks``: embed the prose query with
-    the same ``embedder`` used at export time, then fuse pgvector cosine with FTS."""
+    """Hybrid seed search over persisted ``code_chunks`` (``schema``): embed the
+    prose query with the same ``embedder`` used at export time, then fuse pgvector
+    cosine with FTS."""
     qvec = embedder.embed([query])[0]
     run = search or search_chunks_postgres
-    return run(query, qvec, repo=repo, dsn=dsn, top_n=top_n)
+    return run(query, qvec, repo=repo, dsn=dsn, top_n=top_n, schema=schema)

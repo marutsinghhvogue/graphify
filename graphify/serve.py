@@ -716,13 +716,19 @@ def _format_discover_seeds(G: nx.Graph, query: str, *, top_n: int = 10) -> str:
     return "\n".join(lines)
 
 
-def _format_blast_radius_pg(repo: str, seed: str, *, depth: int = 3) -> str:
+def _pg_schema() -> str:
+    import os
+    return os.environ.get("GRAPHIFY_PG_SCHEMA", "public")
+
+
+def _format_blast_radius_pg(repo: str, seed: str, *, depth: int = 3, schema: str | None = None) -> str:
     """Blast radius computed in Postgres (recursive CTE) — scales across the whole
-    persisted estate, not just the loaded graph. dsn comes from libpq PG* env."""
+    persisted estate, not just the loaded graph. dsn comes from libpq PG* env;
+    schema from the arg or GRAPHIFY_PG_SCHEMA (default public)."""
     from graphify.pg_query import blast_radius_pg
     try:
-        rows = blast_radius_pg(repo, seed, depth=depth)
-    except (ImportError, ConnectionError) as exc:
+        rows = blast_radius_pg(repo, seed, depth=depth, schema=schema or _pg_schema())
+    except (ImportError, ConnectionError, ValueError) as exc:
         return f"Postgres unavailable: {exc}"
     if not rows:
         return f"Blast radius of {sanitize_label(seed)} in {sanitize_label(repo)} (depth {depth}): no affected symbols."
@@ -733,14 +739,16 @@ def _format_blast_radius_pg(repo: str, seed: str, *, depth: int = 3) -> str:
     return "\n".join(lines)
 
 
-def _format_discover_seeds_pg(query: str, repo: str, *, top_n: int = 10, embed: str = "hashing") -> str:
+def _format_discover_seeds_pg(query: str, repo: str, *, top_n: int = 10,
+                              embed: str = "hashing", schema: str | None = None) -> str:
     """Hybrid seed search over persisted code_chunks (pgvector ⊕ FTS). The embedder
-    must match the one used at export-chunks time."""
+    must match the one used at export-chunks time; schema from arg or env."""
     from graphify.pg_query import discover_seeds_pg
     from graphify.semantic_index import get_embedder
     try:
         embedder = get_embedder(embed)
-        hits = discover_seeds_pg(query, repo=repo, embedder=embedder, top_n=top_n)
+        hits = discover_seeds_pg(query, repo=repo, embedder=embedder, top_n=top_n,
+                                 schema=schema or _pg_schema())
     except (ImportError, ConnectionError, ValueError) as exc:
         return f"Postgres seed search unavailable: {exc}"
     if not hits:

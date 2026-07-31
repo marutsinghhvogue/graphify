@@ -4,7 +4,14 @@ from __future__ import annotations
 import sys
 import types
 
-from graphify.pg_export import CORE_SCHEMA_SQL, export_to_postgres, extraction_to_rows
+import pytest
+
+from graphify.pg_export import (
+    core_schema_sql,
+    export_to_postgres,
+    extraction_to_rows,
+    safe_schema,
+)
 
 _EXTRACTION = {
     "nodes": [
@@ -121,13 +128,13 @@ def test_export_replaces_by_repo_and_source_then_upserts(monkeypatch):
     kinds = [row[0] for row in log]
     assert kinds == ["execute", "execute", "executemany", "executemany"]
 
-    # schema first, then a scoped delete keyed by (repo, source)
-    assert "CREATE TABLE IF NOT EXISTS symbols" in log[0][1]
-    assert "DELETE FROM code_edges WHERE repo = %s AND source = %s" in log[1][1]
+    # schema first (default public, qualified), then a scoped delete
+    assert "CREATE TABLE IF NOT EXISTS public.symbols" in log[0][1]
+    assert "DELETE FROM public.code_edges WHERE repo = %s AND source = %s" in log[1][1]
     assert log[1][2] == ("repoX", "scip")
     # symbols upserted (2), edges inserted (2)
-    assert "INSERT INTO symbols" in log[2][1] and len(log[2][2]) == 2
-    assert "INSERT INTO code_edges" in log[3][1] and len(log[3][2]) == 2
+    assert "INSERT INTO public.symbols" in log[2][1] and len(log[2][2]) == 2
+    assert "INSERT INTO public.code_edges" in log[3][1] and len(log[3][2]) == 2
 
 
 def test_export_passes_dsn_through(monkeypatch):
@@ -139,8 +146,26 @@ def test_export_passes_dsn_through(monkeypatch):
 
 def test_core_schema_has_no_pgvector_dependency():
     # structural sink must run on vanilla Postgres (embeddings live elsewhere)
-    assert "vector" not in CORE_SCHEMA_SQL.lower()
-    assert "symbols" in CORE_SCHEMA_SQL and "code_edges" in CORE_SCHEMA_SQL
+    sql = core_schema_sql()
+    assert "vector" not in sql.lower()
+    assert "symbols" in sql and "code_edges" in sql
+
+
+def test_core_schema_qualifies_a_named_schema():
+    sql = core_schema_sql("graphify")
+    assert "CREATE SCHEMA IF NOT EXISTS graphify" in sql
+    assert "graphify.symbols" in sql and "graphify.code_edges" in sql
+    assert "ON graphify.code_edges" in sql   # indexes qualified
+
+
+@pytest.mark.parametrize("bad", ["public; DROP TABLE x", "a-b", "1schema", "Graphify", "a b"])
+def test_safe_schema_rejects_bad_names(bad):
+    with pytest.raises(ValueError):
+        safe_schema(bad)
+
+
+def test_safe_schema_defaults_to_public():
+    assert safe_schema(None) == "public"
 
 
 # --- CLI: graphify export-pg ---
