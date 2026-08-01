@@ -106,3 +106,60 @@ def test_alias_get_post_roundtrip(client, graph_file):
 def test_alias_post_validation(client):
     assert client.post("/api/aliases", json={"from": "", "to": "x"}).status_code == 400
     assert client.post("/api/aliases", json={"from": "a", "to": "b", "mode": "bad"}).status_code == 400
+
+
+# --- v1 REST API (structured, for the embeddable UI) ---
+
+def test_v1_impact(client):
+    # alpha --calls--> beta, so changing beta impacts alpha (reverse reachability)
+    r = client.get("/api/v1/impact?label=beta&depth=2")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["seed"]["id"] == "beta"
+    affected_ids = {a["id"] for a in body["affected"]}
+    assert "alpha" in affected_ids
+    a = next(x for x in body["affected"] if x["id"] == "alpha")
+    assert a["via_relation"] == "calls" and a["depth"] == 1
+
+
+def test_v1_impact_unknown_label(client):
+    assert client.get("/api/v1/impact?label=zzzznope").status_code == 404
+    assert client.get("/api/v1/impact").status_code == 400
+
+
+def test_v1_seeds(client):
+    r = client.get("/api/v1/seeds?q=alpha&top=3")
+    assert r.status_code == 200
+    seeds = r.get_json()["seeds"]
+    assert seeds and seeds[0]["name"] == "alpha"
+
+
+def test_v1_subgraph_returns_nodes_and_edges(client):
+    r = client.get("/api/v1/subgraph?label=alpha&depth=1")
+    assert r.status_code == 200
+    body = r.get_json()
+    ids = {n["id"] for n in body["nodes"]}
+    assert {"alpha", "beta"} <= ids
+    assert any(e["relation"] == "calls" for e in body["edges"])
+
+
+def test_v1_stats(client):
+    body = client.get("/api/v1/stats").get_json()
+    assert body["nodes"] == 3 and body["edges"] == 2
+    assert body["confidence"].get("EXTRACTED", 0) >= 1
+
+
+def test_api_key_gates_endpoints(graph_file):
+    path, root = graph_file
+    app = create_app(str(path), root=str(root))
+    app.config.update(TESTING=True, GRAPHIFY_API_KEY="secret")
+    c = app.test_client()
+    assert c.get("/health").status_code == 200                 # health never gated
+    assert c.get("/api/v1/stats").status_code == 401           # missing key
+    assert c.get("/api/v1/stats", headers={"X-API-Key": "secret"}).status_code == 200
+    assert c.get("/api/v1/stats", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
+def test_cors_header_present(client):
+    r = client.get("/api/v1/stats", headers={"Origin": "http://host.app"})
+    assert r.headers.get("Access-Control-Allow-Origin") == "*"

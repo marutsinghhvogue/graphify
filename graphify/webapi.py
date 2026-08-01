@@ -6,16 +6,18 @@ query/callers/callees reuse :mod:`graphify.serve`, review questions reuse
 :mod:`graphify.aliases`. This runs alongside (not instead of) the MCP server in
 ``serve.py``; MCP stays the agent-facing protocol, this is the browser/REST face.
 
-Endpoints (all JSON):
-  GET  /health
-  GET  /api/query?q=...&mode=bfs|dfs&depth=3
-  GET  /api/nodes?label=...
-  GET  /api/callers?label=...
-  GET  /api/callees?label=...
-  GET  /api/review/uncertain-edges?confidence=INFERRED,AMBIGUOUS
-  GET  /api/review/questions
-  GET  /api/aliases
-  POST /api/aliases     body: {"from","to","mode","reason","contributor"}
+Legacy endpoints (text/JSON): /health, /api/query, /api/nodes, /api/callers,
+/api/callees, /api/review/*, /api/aliases.
+
+v1 REST API (structured JSON, built for an embeddable UI):
+  GET  /api/v1/impact?label=...&depth=2     blast radius (affected symbols)
+  GET  /api/v1/seeds?q=...&top=10           Stage 2: prose -> ranked seed symbols
+  GET  /api/v1/subgraph?label=...&depth=1   nodes + edges for graph viz
+  GET  /api/v1/stats                        node/edge/community/confidence counts
+
+Embedding controls (env): ``GRAPHIFY_API_KEY`` gates every endpoint but /health
+(via ``X-API-Key`` or ``Authorization: Bearer``); ``GRAPHIFY_CORS_ORIGINS`` (comma
+list or ``*``) sets the allowed origins for the UI's host app.
 
 Flask is an optional dependency: ``pip install "graphifyy[web]"``.
 """
@@ -49,9 +51,40 @@ def _node_view(G, nid: str) -> dict:
         "id": nid,
         "label": d.get("label", nid),
         "file_type": d.get("file_type"),
+        "kind": d.get("kind"),
         "source_file": d.get("source_file"),
         "source_location": d.get("source_location"),
+        "service": (d.get("metadata") or {}).get("service"),
     }
+
+
+def _impact_view(G, hit) -> dict:
+    """Serialize an affected.AffectedHit into a UI-friendly record."""
+    view = _node_view(G, hit.node_id)
+    view.update(depth=hit.depth, via_relation=hit.via_relation,
+                confidence=hit.confidence or "EXTRACTED")
+    return view
+
+
+def _subgraph(G, seed: str, *, depth: int) -> dict:
+    """Nodes + edges within ``depth`` hops of ``seed`` (both directions) — the
+    render payload for a graph-viz UI."""
+    seen = {seed}
+    frontier = [seed]
+    for _ in range(max(depth, 0)):
+        nxt = []
+        for n in frontier:
+            for nb in list(G.successors(n)) + list(G.predecessors(n)):
+                if nb not in seen:
+                    seen.add(nb)
+                    nxt.append(nb)
+        frontier = nxt
+    edges = [
+        {"source": u, "target": v, "relation": d.get("relation"),
+         "confidence": d.get("confidence"), "confidence_score": d.get("confidence_score")}
+        for u, v, d in G.edges(data=True) if u in seen and v in seen
+    ]
+    return {"nodes": [_node_view(G, n) for n in seen], "edges": edges}
 
 
 def create_app(graph_path: str, root: str | None = None):
@@ -63,12 +96,51 @@ def create_app(graph_path: str, root: str | None = None):
             'web API needs the "web" extra (flask). Run: pip install "graphifyy[web]"'
         ) from e
 
+    import os
+
     app = Flask(__name__)
     app.config["GRAPHIFY_GRAPH_PATH"] = graph_path
     app.config["GRAPHIFY_ROOT"] = root or "."
+    # Embedding controls (env-overridable): an optional API key gates every
+    # endpoint except /health, and CORS allows the UI's host origin(s).
+    app.config.setdefault("GRAPHIFY_API_KEY", os.environ.get("GRAPHIFY_API_KEY", ""))
+    app.config.setdefault("GRAPHIFY_CORS_ORIGINS",
+                          os.environ.get("GRAPHIFY_CORS_ORIGINS", "*"))
 
     def _graph():
         return _get_graph(app.config["GRAPHIFY_GRAPH_PATH"])
+
+    def _allowed_origin(origin: str) -> str:
+        allowed = app.config["GRAPHIFY_CORS_ORIGINS"]
+        if allowed == "*" or not origin:
+            return "*"
+        origins = {o.strip() for o in allowed.split(",") if o.strip()}
+        return origin if origin in origins else ""
+
+    @app.after_request
+    def _cors(resp):
+        origin = _allowed_origin(request.headers.get("Origin", ""))
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Vary"] = "Origin"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        return resp
+
+    @app.before_request
+    def _auth():
+        if request.method == "OPTIONS" or request.path == "/health":
+            return None
+        key = app.config["GRAPHIFY_API_KEY"]
+        if not key:
+            return None  # auth disabled
+        supplied = request.headers.get("X-API-Key") or ""
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            supplied = supplied or auth[7:].strip()
+        if supplied != key:
+            return jsonify({"error": "unauthorized"}), 401
+        return None
 
     @app.get("/health")
     def health():
@@ -177,6 +249,77 @@ def create_app(graph_path: str, root: str | None = None):
         )
         # The alias is persisted but not yet in the graph; rebuild applies it.
         return jsonify({"alias": entry, "note": "recorded; run a graphify build to apply"}), 201
+
+    # ── v1 REST API (structured JSON for an embeddable UI) ────────────────────
+
+    @app.get("/api/v1/impact")
+    def v1_impact():
+        """Blast radius: symbols affected by changing `label` (reverse reachability,
+        cross-boundary + confidence-tiered)."""
+        from .affected import DEFAULT_AFFECTED_RELATIONS, affected_nodes, resolve_seed
+        label = (request.args.get("label") or "").strip()
+        if not label:
+            return jsonify({"error": "missing required query param 'label'"}), 400
+        try:
+            depth = int(request.args.get("depth", 2))
+        except ValueError:
+            return jsonify({"error": "depth must be an integer"}), 400
+        G = _graph()
+        seed = resolve_seed(G, label)
+        if seed is None:
+            return jsonify({"error": f"no unique node for '{label}'"}), 404
+        hits = affected_nodes(G, seed, relations=DEFAULT_AFFECTED_RELATIONS, depth=depth)
+        return jsonify({"seed": _node_view(G, seed), "depth": depth,
+                        "count": len(hits), "affected": [_impact_view(G, h) for h in hits]})
+
+    @app.get("/api/v1/seeds")
+    def v1_seeds():
+        """Stage 2: prose requirement -> ranked code symbols it touches."""
+        from .semantic_index import chunk_nodes, retrieve_seeds
+        q = (request.args.get("q") or "").strip()
+        if not q:
+            return jsonify({"error": "missing required query param 'q'"}), 400
+        try:
+            top = int(request.args.get("top", 10))
+        except ValueError:
+            return jsonify({"error": "top must be an integer"}), 400
+        G = _graph()
+        nodes = [{"id": n, "label": d.get("label", n), "kind": d.get("kind"),
+                  "source_file": d.get("source_file"), "metadata": d.get("metadata")}
+                 for n, d in G.nodes(data=True)]
+        hits = retrieve_seeds(q, chunk_nodes(nodes), top_n=top)
+        return jsonify({"query": q, "seeds": [
+            {"symbol_id": h.symbol_id, "name": h.name, "path": h.path, "kind": h.kind,
+             "score": h.score, "matched": h.matched} for h in hits]})
+
+    @app.get("/api/v1/subgraph")
+    def v1_subgraph():
+        """Nodes + edges around `label` for graph visualization."""
+        from .affected import resolve_seed
+        label = (request.args.get("label") or "").strip()
+        if not label:
+            return jsonify({"error": "missing required query param 'label'"}), 400
+        try:
+            depth = int(request.args.get("depth", 1))
+        except ValueError:
+            return jsonify({"error": "depth must be an integer"}), 400
+        G = _graph()
+        seed = resolve_seed(G, label)
+        if seed is None:
+            return jsonify({"error": f"no unique node for '{label}'"}), 404
+        out = _subgraph(G, seed, depth=depth)
+        return jsonify({"seed": seed, "depth": depth, **out})
+
+    @app.get("/api/v1/stats")
+    def v1_stats():
+        G = _graph()
+        confs: dict[str, int] = {}
+        for _, _, d in G.edges(data=True):
+            c = d.get("confidence", "EXTRACTED")
+            confs[c] = confs.get(c, 0) + 1
+        communities = _serve._communities_from_graph(G)
+        return jsonify({"nodes": G.number_of_nodes(), "edges": G.number_of_edges(),
+                        "communities": len(communities), "confidence": confs})
 
     return app
 
