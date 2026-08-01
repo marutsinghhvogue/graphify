@@ -1,0 +1,35 @@
+{
+  "name": "graphify-react",
+  "version": "0.1.0",
+  "description": "Embeddable React components + hooks for the graphify code-intelligence REST API (impact / blast radius, seed discovery, subgraph viz).",
+  "type": "module",
+  "main": "./dist/graphify-react.umd.cjs",
+  "module": "./dist/graphify-react.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/graphify-react.js",
+      "require": "./dist/graphify-react.umd.cjs"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.7",
+    "vite-plugin-dts": "^4.3.0"
+  },
+  "keywords": ["graphify", "code-intelligence", "blast-radius", "react", "knowledge-graph"],
+  "license": "SEE LICENSE IN ../../LICENSE"
+}
