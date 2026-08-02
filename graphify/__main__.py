@@ -2226,6 +2226,8 @@ def main() -> None:
         print("                          code_edges (recursive CTE) --repo R [--depth N] [--schema S] [--dsn D]")
         print("  search-chunks \"<text>\"  hybrid seed search over persisted code_chunks (pgvector+FTS)")
         print("                          --repo R [--embed E] [--top N] [--schema S] [--dsn D]")
+        print("  taint [path]            PDG + source->sink taint (Python): untrusted input reaching")
+        print("                          a dangerous sink without sanitization; [--json]")
         print("  learn-bindings [path]   LLM proposes binding rules for framework constructs with")
         print("                          no rule yet (schedulers/events); --write persists them to")
         print("                          .graphify_binding_rules.json for deterministic --bindings runs")
@@ -3352,6 +3354,46 @@ def main() -> None:
             print(f'Seed symbols for "{ns.query}" in {ns.repo} (top {len(hits)}):')
             for h in hits:
                 print(f"  {h.get('name') or h.get('symbol_id')}  {h.get('path') or '-'}")
+    elif cmd == "taint":
+        # graphify taint [path] [--json]
+        # PDG + source->sink taint (Python): where does untrusted/sensitive input
+        # reach a dangerous sink without sanitization.
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify taint")
+        p.add_argument("path", nargs="?", default=".")
+        p.add_argument("--json", action="store_true", help="emit findings as JSON")
+        ns = p.parse_args(sys.argv[2:])
+        target = Path(ns.path).resolve()
+        if not target.exists():
+            print(f"error: path not found: {target}", file=sys.stderr)
+            sys.exit(1)
+        from graphify.taint import taint_scan, taint_source
+        if target.is_file():
+            res = taint_source(target.read_text(encoding="utf-8", errors="replace"),
+                               path=str(target), ns=target.stem)
+            findings = res["findings"]
+            stats = {"findings": len(findings)}
+        else:
+            scan = taint_scan(target)
+            findings, stats = scan["findings"], scan["stats"]
+        if ns.json:
+            import json as _json
+            print(_json.dumps([{
+                "vuln": f.vuln, "category": f.category, "confidence": f.confidence,
+                "source": f.source, "sink": f.sink, "path": f.path,
+            } for f in findings], indent=2))
+        elif not findings:
+            print("No taint findings.")
+        else:
+            print(f"{stats['findings']} taint finding(s):\n")
+            for f in findings:
+                print(f"  {f.vuln} ({f.confidence}) [{f.category}]")
+                for step in f.path:
+                    tag = " <source>" if step["stmt_id"] == f.source["stmt_id"] else (
+                        " <sink>" if step["stmt_id"] == f.sink["stmt_id"] else "")
+                    print(f"    L{step['line']}: {step['text']}{tag}")
+                print()
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]
         #                      [--outcome useful|dead_end|corrected] [--correction TEXT]
