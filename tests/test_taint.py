@@ -105,3 +105,52 @@ def test_taint_scan_stats(tmp_path):
     assert scan["stats"]["findings"] == 1
     assert scan["stats"]["by_vuln"] == {"sql_injection": 1}
     assert any(e["relation"] == "flows_to" for e in scan["edges"])
+
+
+# --- inter-procedural taint (summary-based, call-graph fixpoint) ---
+
+def test_tainted_arg_reaches_sink_in_callee():
+    fs = _f("def run_query(cursor, sql):\n    cursor.execute(sql)\n\n"
+            "def handler(request, cursor):\n"
+            "    uid = request.args.get('id')\n"
+            "    run_query(cursor, uid)\n")
+    assert len(fs) == 1 and fs[0].vuln == "sql_injection"
+    assert fs[0].sink.get("callee") == "run_query"        # sink is inside the callee
+    assert fs[0].source["func"] == "handler"
+
+
+def test_source_wrapper_return_value():
+    # get_id() returns untrusted input; its result flows to a sink
+    fs = _f("def get_id(request):\n    return request.args.get('id')\n\n"
+            "def handler(request, cursor):\n    cursor.execute(get_id(request))\n")
+    assert len(fs) == 1 and fs[0].vuln == "sql_injection"
+
+
+def test_transitive_through_two_calls():
+    fs = _f("def b(cursor, y):\n    cursor.execute(y)\n\n"
+            "def a(cursor, x):\n    b(cursor, x)\n\n"
+            "def handler(request, cursor):\n    a(cursor, request.args.get('id'))\n")
+    assert len(fs) == 1 and fs[0].vuln == "sql_injection"
+
+
+def test_sanitizing_callee_blocks_the_flow():
+    assert _f("def run_query(cursor, sql):\n    cursor.execute(int(sql))\n\n"
+              "def handler(request, cursor):\n"
+              "    run_query(cursor, request.args.get('id'))\n") == []
+
+
+def test_clean_argument_no_finding():
+    assert _f("def run_query(cursor, sql):\n    cursor.execute(sql)\n\n"
+              "def handler(cursor):\n    run_query(cursor, 5)\n") == []
+
+
+def test_cross_file_flow(tmp_path):
+    # source in one file, sink function in another (callee resolved by name)
+    (tmp_path / "db.py").write_text("def run_query(cursor, sql):\n    cursor.execute(sql)\n")
+    (tmp_path / "views.py").write_text(
+        "from db import run_query\n"
+        "def handler(request, cursor):\n"
+        "    run_query(cursor, request.args.get('id'))\n"
+    )
+    scan = taint_scan(tmp_path)
+    assert scan["stats"]["by_vuln"].get("sql_injection") == 1

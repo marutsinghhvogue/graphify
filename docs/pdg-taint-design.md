@@ -18,12 +18,19 @@ without sanitization. For a regulated/commercial estate this also answers "does
 PII/PCI data reach an unsafe sink or cross a boundary," and it makes `blast_radius`
 security-aware.
 
-# Scope (v1 spike → productionize)
+# Scope
 
-- **v1:** Python, **intra-procedural data dependence** (def→use within a function)
-  + rule-driven **source→sink taint**. This is the tractable, high-value core.
-- **Later:** control dependence (the PDG's other half), inter-procedural flows
-  (across calls), more languages, field/index sensitivity.
+- **v1 (built):** Python, **intra-procedural data dependence** (def→use within a
+  function) + rule-driven **source→sink taint**.
+- **v2 (built):** **inter-procedural taint** — summary-based over the call graph
+  (compute per-function summaries: which params reach a sink / the return, and
+  whether the function returns internal taint; propagate to a fixpoint). Handles
+  tainted-arg→callee-sink, source-wrapper return values, transitivity through
+  chains, sanitizing callees, and cross-file flows (callee resolved by name).
+  Taint is a *set* of tags per variable, so a param use can't mask a real source.
+- **Later:** control dependence (the PDG's other half), field/index sensitivity,
+  more languages, precise cross-file callee resolution (imports vs. name-match),
+  and graph/MCP/SDK integration of `flows_to`.
 
 Honest limitation of v1: last-write def-use over statement order is exact for
 straight-line code and approximate around branches/loops (a CFG-based

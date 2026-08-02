@@ -3389,10 +3389,15 @@ def main() -> None:
             print(f"{stats['findings']} taint finding(s):\n")
             for f in findings:
                 print(f"  {f.vuln} ({f.confidence}) [{f.category}]")
-                for step in f.path:
-                    tag = " <source>" if step["stmt_id"] == f.source["stmt_id"] else (
-                        " <sink>" if step["stmt_id"] == f.sink["stmt_id"] else "")
-                    print(f"    L{step['line']}: {step['text']}{tag}")
+                src = f.source
+                print(f"    source  L{src['line']}: {src['text']}")
+                for step in f.path[1:-1]:
+                    print(f"            L{step['line']}: {step['text']}")
+                callee = f.sink.get("callee")
+                if callee:
+                    print(f"    sink    in {callee}()  (called at L{f.sink['line']})")
+                else:
+                    print(f"    sink    L{f.sink['line']}: {f.sink['text']}")
                 print()
     elif cmd == "save-result":
         # graphify save-result --question Q --answer A [--type T] [--nodes N1 N2 ...]

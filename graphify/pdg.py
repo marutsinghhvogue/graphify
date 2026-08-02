@@ -24,6 +24,19 @@ def _parser():
     return Parser(Language(tspy.language()))
 
 
+@dataclass(frozen=True)
+class Arg:
+    var: str | None             # variable name if the arg is a plain identifier
+    text: str                   # the arg's source text (for source-pattern matching)
+    callee: str | None          # callee name if the arg is itself a call (nested)
+
+
+@dataclass(frozen=True)
+class CallSite:
+    callee: str                 # last name of the called function (g / obj.g -> g)
+    args: tuple                 # tuple[Arg] — one per positional argument
+
+
 @dataclass
 class Stmt:
     id: str
@@ -33,6 +46,8 @@ class Stmt:
     uses: list[str]
     node_type: str
     func: str
+    calls: list = field(default_factory=list)              # list[CallSite]
+    params: list[str] = field(default_factory=list)        # set on the function_entry stmt
     tainted: dict[str, Any] = field(default_factory=dict)  # filled by taint.py
 
 
@@ -87,6 +102,38 @@ def _base_use_of_target(node) -> list[str]:
     if node is not None and node.type in ("subscript", "attribute"):
         return _use_names(node)
     return []
+
+
+def _callee_name(fn) -> str:
+    if fn is None:
+        return ""
+    if fn.type == "identifier":
+        return fn.text.decode()
+    if fn.type == "attribute":
+        a = fn.child_by_field_name("attribute")
+        return a.text.decode() if a is not None else ""
+    return ""
+
+
+def _call_args(src: bytes, call) -> tuple:
+    args = call.child_by_field_name("arguments")
+    out: list = []
+    if args is not None:
+        for c in args.named_children:
+            if c.type == "keyword_argument":
+                c = c.child_by_field_name("value") or c
+            var = c.text.decode() if c.type == "identifier" else None
+            callee = _callee_name(c.child_by_field_name("function")) if c.type == "call" else None
+            out.append(Arg(var, _read(src, c), callee))
+    return tuple(out)
+
+
+def _stmt_calls(src: bytes, stmt) -> list:
+    """Every call in a statement (outer + nested), for inter-procedural taint."""
+    return [
+        CallSite(_callee_name(c.child_by_field_name("function")), _call_args(src, c))
+        for c in _descendants(stmt, "call")
+    ]
 
 
 def _stmt_def_use(stmt) -> tuple[list[str], list[str]]:
@@ -198,7 +245,7 @@ def _analyze_function(fn, src: bytes, path: str, findings_ns: str) -> tuple[list
         return f"stmt_{findings_ns}_{name}_{i}".lower().replace(" ", "_")
 
     entry = Stmt(sid(0), (fn.start_point[0] + 1), f"def {name}(...)", list(param_names), [],
-                 "function_entry", name)
+                 "function_entry", name, params=list(param_names))
     stmts.append(entry)
     for p in param_names:
         last_def[p] = entry.id
@@ -206,7 +253,8 @@ def _analyze_function(fn, src: bytes, path: str, findings_ns: str) -> tuple[list
     for i, st in enumerate(_iter_statements(body), start=1):
         defs, uses = _stmt_def_use(st)
         text = _read(src, st) if st.end_byte > st.start_byte else ""
-        s = Stmt(sid(i), st.start_point[0] + 1, text, defs, uses, st.type, name)
+        s = Stmt(sid(i), st.start_point[0] + 1, text, defs, uses, st.type, name,
+                 calls=_stmt_calls(src, st))
         stmts.append(s)
         for u in uses:
             d = last_def.get(u)
