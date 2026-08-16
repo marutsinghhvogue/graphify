@@ -716,6 +716,96 @@ def _format_discover_seeds(G: nx.Graph, query: str, *, top_n: int = 10) -> str:
     return "\n".join(lines)
 
 
+def _format_map_services(G: nx.Graph, query: str, *, top_n: int = 10) -> str:
+    """Stage 1: rank the SERVICES a prose requirement most likely requires
+    changing, before drilling to symbols (discover_seeds) or edges (blast_radius).
+
+    Builds a responsibility profile per service from the loaded graph (grouped by
+    ``metadata.service``, which the contract layer stamps on handlers/routes) — its
+    API surface, entry points, and domain vocabulary — then ranks profiles against
+    the requirement. Doc-enriched profiles (READMEs) come from the CLI `graphify
+    services --root DIR`. Module-level so it is unit-testable without the transport."""
+    from graphify.service_profiles import build_profiles, rank_services
+
+    nodes = [
+        {"id": n, "label": d.get("label", n), "kind": d.get("kind"),
+         "source_file": d.get("source_file"), "metadata": d.get("metadata")}
+        for n, d in G.nodes(data=True)
+    ]
+    profiles = build_profiles(nodes)
+    if not profiles:
+        return ("No services found: no node carries metadata.service. "
+                "Build the graph with `graphify extract --cross-service` (or use the "
+                "CLI `graphify services --root DIR` to profile a directory of services).")
+    hits = rank_services(query, profiles, top_n=top_n)
+    if not hits:
+        return f"No responsible service found for: {sanitize_label(query)}"
+    lines = [f'Responsible services for "{sanitize_label(query)}" (top {len(hits)}):']
+    for m in hits:
+        ev = f"  <- {sanitize_label(m.evidence[0])}" if m.evidence else ""
+        lines.append(f"  {m.score:.4f} [{sanitize_label(m.matched)}] {sanitize_label(m.service)}{ev}")
+    return "\n".join(lines)
+
+
+def _format_plan_change(G: nx.Graph, query: str, *, top_services: int = 3,
+                        top_seeds: int = 5, depth: int = 2) -> str:
+    """PRD→impact end to end: rank responsible services (Stage 1), discover seed
+    symbols scoped to them (Stage 2), then blast radius from the top seeds (Stage 3,
+    crossing service boundaries). Returns the three-stage plan naming both the
+    directly-responsible and downstream-impacted services. Graph labels are
+    sanitised (untrusted node content). Module-level so it is unit-testable."""
+    from graphify.change_plan import format_change_plan, plan_change
+
+    plan = plan_change(G, query, top_services=top_services, top_seeds=top_seeds, depth=depth)
+    if not plan.services and plan.scoped_to_all and not plan.seeds:
+        return ("No services found: no node carries metadata.service. Build the graph "
+                "with `graphify extract --cross-service` (or use the CLI `graphify plan "
+                "--root DIR` to profile + plan over a directory of services).")
+    return format_change_plan(plan, sanitize=sanitize_label)
+
+
+def _format_taint(G: nx.Graph, *, vuln: str = "") -> str:
+    """Render taint findings (source→sink flows) recorded in the graph as
+    ``flows_to`` edges by ``graphify extract --taint``. Each edge carries the
+    whole finding in metadata, so this is a read of the persisted graph — no
+    re-analysis. Optionally filter by a vuln category. Module-level so it is
+    unit-testable without the MCP transport."""
+    findings = []
+    for u, v, d in G.edges(data=True):
+        if d.get("relation") != "flows_to":
+            continue
+        meta = d.get("metadata") or {}
+        if vuln and meta.get("vuln") != vuln:
+            continue
+        findings.append((u, v, meta, d))
+    if not findings:
+        scope = f" for '{sanitize_label(vuln)}'" if vuln else ""
+        return (f"No taint findings{scope}. (Build the graph with "
+                "`graphify extract --taint` to record source→sink flows.)")
+    findings.sort(key=lambda t: (t[2].get("vuln") or "", (t[2].get("source") or {}).get("line", 0)))
+    lines = [f"Taint findings ({len(findings)}):"]
+    for _u, _v, meta, d in findings:
+        src = meta.get("source") or {}
+        sink = meta.get("sink") or {}
+        conf = meta.get("confidence") or d.get("confidence") or "INFERRED"
+        vulns = sanitize_label(str(meta.get("vuln") or "?"))
+        cat = sanitize_label(str(meta.get("category") or "?"))
+        s_loc = f"{src.get('file') or '-'}:L{src.get('line', 0)}"
+        lines.append(f"  {vulns} [{sanitize_label(conf)}] [{cat}]")
+        lines.append(f"    source: {sanitize_label(str(src.get('text') or ''))}  {sanitize_label(s_loc)}")
+        for step in (meta.get("path") or [])[1:-1]:
+            st_loc = f"{step.get('file') or '-'}:L{step.get('line', 0)}"
+            lines.append(f"      -> {sanitize_label(str(step.get('text') or ''))}  {sanitize_label(st_loc)}")
+        callee = meta.get("callee")
+        if callee:
+            k_loc = f"{sink.get('file') or '-'}:L{sink.get('line', 0)}"
+            lines.append(f"    sink: in {sanitize_label(str(callee))}() (called at {sanitize_label(k_loc)})")
+        else:
+            k_loc = f"{sink.get('file') or '-'}:L{sink.get('line', 0)}"
+            lines.append(f"    sink: {sanitize_label(str(sink.get('text') or ''))}  {sanitize_label(k_loc)}")
+    return "\n".join(lines)
+
+
 def _pg_schema() -> str:
     import os
     return os.environ.get("GRAPHIFY_PG_SCHEMA", "public")
@@ -997,6 +1087,68 @@ def _build_server(graph_path: str):
                 },
             ),
             types.Tool(
+                name="map_services",
+                description=(
+                    "STAGE 1 of PRD→plan: given a requirement in prose, return the SERVICES "
+                    "most likely to need changing (ranked), before drilling to symbols. Each "
+                    "service is profiled by its responsibility — API surface (routes), entry "
+                    "points (schedulers/events), and domain vocabulary — so a PRD written in "
+                    "business language ('add sales tax to what a customer is charged') maps to "
+                    "the owning service even with no shared identifiers. Requires a graph whose "
+                    "nodes carry metadata.service (build with `graphify extract --cross-service`). "
+                    "Use this first to scope the estate, then discover_seeds + blast_radius within."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The requirement / feature description in prose"},
+                        "top_n": {"type": "integer", "default": 10, "description": "How many services to return"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            types.Tool(
+                name="plan_change",
+                description=(
+                    "PRD→impact END TO END, service-first: given a requirement in prose, "
+                    "return the full change plan — (1) the responsible SERVICES, (2) the seed "
+                    "symbols to change, scoped to those services (falling back to their handlers "
+                    "when the prose matches no symbol name), and (3) the blast radius from those "
+                    "seeds, which crosses service boundaries to name the DOWNSTREAM-impacted "
+                    "services too. This composes map_services + discover_seeds + blast_radius in "
+                    "one call — use it to answer 'which services must change for this PRD, and "
+                    "what else does that ripple into?'. Needs a graph with metadata.service "
+                    "(build with `graphify extract --cross-service`)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The requirement / PRD description in prose"},
+                        "top_services": {"type": "integer", "default": 3, "description": "Services to scope seed discovery to"},
+                        "top_seeds": {"type": "integer", "default": 5, "description": "Seed symbols to launch blast radius from"},
+                        "depth": {"type": "integer", "default": 2, "description": "Blast-radius reverse-reachability hops"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            types.Tool(
+                name="taint",
+                description=(
+                    "Show TAINT findings: untrusted/sensitive inputs (sources) that reach "
+                    "dangerous operations (sinks) — SQL injection, command injection, code "
+                    "injection — without a sanitizer on the path, inter-procedurally. Returns "
+                    "each source→…→sink flow with file:line + vuln category + confidence. "
+                    "Requires a graph built with `graphify extract --taint` (findings are "
+                    "persisted as INFERRED 'flows_to' edges). Optionally filter by vuln."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vuln": {"type": "string", "description": "Filter to one vuln (e.g. sql_injection, command_injection)"},
+                    },
+                },
+            ),
+            types.Tool(
                 name="blast_radius_pg",
                 description=(
                     "Blast radius computed in Postgres (bounded recursive CTE over persisted "
@@ -1259,6 +1411,22 @@ def _build_server(graph_path: str):
             G, arguments["query"], top_n=int(arguments.get("top_n", 10))
         )
 
+    def _tool_map_services(arguments: dict) -> str:
+        return _format_map_services(
+            G, arguments["query"], top_n=int(arguments.get("top_n", 10))
+        )
+
+    def _tool_plan_change(arguments: dict) -> str:
+        return _format_plan_change(
+            G, arguments["query"],
+            top_services=int(arguments.get("top_services", 3)),
+            top_seeds=int(arguments.get("top_seeds", 5)),
+            depth=int(arguments.get("depth", 2)),
+        )
+
+    def _tool_taint(arguments: dict) -> str:
+        return _format_taint(G, vuln=str(arguments.get("vuln", "")).strip())
+
     def _tool_blast_radius_pg(arguments: dict) -> str:
         return _format_blast_radius_pg(
             arguments["repo"], arguments["seed_symbol"],
@@ -1377,6 +1545,9 @@ def _build_server(graph_path: str):
         "shortest_path": _tool_shortest_path,
         "blast_radius": _tool_blast_radius,
         "discover_seeds": _tool_discover_seeds,
+        "map_services": _tool_map_services,
+        "plan_change": _tool_plan_change,
+        "taint": _tool_taint,
         "blast_radius_pg": _tool_blast_radius_pg,
         "discover_seeds_pg": _tool_discover_seeds_pg,
         "list_prs": _tool_list_prs,

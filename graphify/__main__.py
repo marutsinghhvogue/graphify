@@ -2216,6 +2216,13 @@ def main() -> None:
         print("    --graph <path>          base graph.json (default graphify-out/graph.json)")
         print("    --out <path>            output path (default: overwrite --graph)")
         print("    --force                 allow overwrite even if node count drops")
+        print("  plan \"<text>\"           PRD->impact end to end: responsible services -> scoped seeds ->")
+        print("                          cross-service blast radius [graph] [--root DIR] [--top-services N]")
+        print("                          [--top-seeds N] [--depth N] [--embed E]")
+        print("  benchmark-plan \"<prds>\"  quantify plan vs a grep/read agent (tool calls + tokens saved)")
+        print("                          --root DIR; PRDs separated by ';' [--top-services N] [--depth N]")
+        print("  services \"<text>\"       Stage 1: prose requirement -> ranked services responsible for it")
+        print("                          [graph] [--root DIR] [--embed E] [--top N]; --root loads per-service READMEs")
         print("  seeds \"<text>\" [graph]  Stage 2: prose requirement -> ranked code symbols it touches")
         print("                          (BM25 over names/paths/docs); --embed openai|gemini for hybrid")
         print("  init-pg                 create graphify's schema + tables (no data) on a shared DB")
@@ -2329,6 +2336,8 @@ def main() -> None:
         print("                            .graphify_binding_rules.json) → typed edges to handlers")
         print("    --cloud-schedulers      detect Tier-B cloud/IaC schedules (Terraform EventBridge/")
         print("                            Cloud Scheduler, k8s CronJob, serverless.yml) → schedule nodes")
+        print("    --taint                 run PDG + inter-procedural taint (source→sink); merge the")
+        print("                            finding paths as statement nodes + flows_to edges (INFERRED)")
         print("    --global                also merge the resulting graph into the global graph")
         print("    --as <tag>              repo tag for --global (default: target directory name)")
         print("  global add <graph.json>  add/update a project graph in the global graph (~/.graphify/global-graph.json)")
@@ -3266,6 +3275,164 @@ def main() -> None:
             for h in hits:
                 kind = f" ({h.kind})" if h.kind else ""
                 print(f"  {h.score:.4f} [{h.matched}] {h.name}{kind}  {h.path}")
+    elif cmd == "services":
+        # graphify services "<prd>" [graph.json] [--root DIR] [--top N] [--embed E]
+        # Stage 1: prose requirement → the services responsible for it (ranked),
+        # the coarse "which services must change" cut before symbol-level seeds.
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify services")
+        p.add_argument("query")
+        p.add_argument("graph", nargs="?", default=None)
+        p.add_argument("--root", default=None,
+                       help="corpus dir whose immediate subdirs are services "
+                            "(loads per-service READMEs + enables path-based grouping)")
+        p.add_argument("--top", type=int, default=10)
+        p.add_argument("--embed", default=None,
+                       help="embedder for hybrid retrieval: hashing|openai|gemini (default: lexical-only)")
+        p.add_argument("--summarize", default=None, metavar="BACKEND",
+                       help="LLM backend (claude|openai|gemini|…) to author a capability "
+                            "sentence per service, folded into matching (default: off)")
+        ns = p.parse_args(sys.argv[2:])
+        from graphify.semantic_index import get_embedder
+        from graphify.service_profiles import (
+            LLMSummarizer,
+            build_profiles,
+            load_service_docs,
+            rank_services,
+        )
+
+        # Nodes come from an explicit/extracted graph.json, else from scanning
+        # --root's service subdirs directly (self-contained: no prior extract needed).
+        if ns.graph:
+            gp = Path(ns.graph).resolve()
+            if not gp.exists():
+                print(f"error: graph file not found: {gp}", file=sys.stderr)
+                sys.exit(1)
+            nodes = json.loads(gp.read_text(encoding="utf-8")).get("nodes", [])
+        elif ns.root:
+            from graphify.contract_introspect import cross_service_graph
+            nodes = cross_service_graph(ns.root)["nodes"]
+        else:
+            gp = Path(_default_graph_path())
+            if not gp.exists():
+                print("error: pass a graph.json or --root DIR, or run `graphify extract` first",
+                      file=sys.stderr)
+                sys.exit(1)
+            nodes = json.loads(gp.read_text(encoding="utf-8")).get("nodes", [])
+
+        embedder = None
+        if ns.embed:
+            try:
+                embedder = get_embedder(ns.embed)
+            except (ValueError, ImportError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+        docs = load_service_docs(ns.root) if ns.root else {}
+        summarizer = LLMSummarizer(backend=ns.summarize) if ns.summarize else None
+        profiles = build_profiles(nodes, root=ns.root, service_docs=docs, summarizer=summarizer)
+        if not profiles:
+            print("No services found: nodes need metadata.service "
+                  "(build with `graphify extract --cross-service`) or pass --root DIR of service subdirs.")
+        else:
+            hits = rank_services(ns.query, profiles, embedder=embedder, top_n=ns.top)
+            if not hits:
+                print(f"No responsible service found for: {ns.query}")
+            else:
+                print(f'Responsible services for "{ns.query}" (top {len(hits)}):')
+                for m in hits:
+                    ev = f"  <- {m.evidence[0]}" if m.evidence else ""
+                    print(f"  {m.score:.4f} [{m.matched}] {m.service}{ev}")
+    elif cmd == "plan":
+        # graphify plan "<prd>" [graph.json] [--root DIR] [--top-services N]
+        #   [--top-seeds N] [--depth N] [--embed E]
+        # PRD→impact end to end: responsible services (1) → scoped seeds (2) →
+        # blast radius crossing service boundaries (3).
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify plan")
+        p.add_argument("query")
+        p.add_argument("graph", nargs="?", default=None)
+        p.add_argument("--root", default=None,
+                       help="corpus dir whose immediate subdirs are services "
+                            "(loads per-service READMEs; also scans them when no graph is given)")
+        p.add_argument("--top-services", type=int, default=3)
+        p.add_argument("--top-seeds", type=int, default=5)
+        p.add_argument("--depth", type=int, default=2)
+        p.add_argument("--embed", default=None,
+                       help="embedder for hybrid retrieval: hashing|openai|gemini (default: lexical-only)")
+        p.add_argument("--summarize", default=None, metavar="BACKEND",
+                       help="LLM backend (claude|openai|gemini|…) to author a capability "
+                            "sentence per service, folded into Stage-1 matching (default: off)")
+        ns = p.parse_args(sys.argv[2:])
+        from graphify.change_plan import (
+            format_change_plan,
+            graph_from_extraction,
+            plan_change,
+        )
+        from graphify.semantic_index import get_embedder
+        from graphify.service_profiles import LLMSummarizer, load_service_docs
+
+        docs: dict = {}
+        if ns.graph:
+            gp = Path(ns.graph).resolve()
+            if not gp.exists():
+                print(f"error: graph file not found: {gp}", file=sys.stderr)
+                sys.exit(1)
+            from graphify.affected import load_graph
+            G = load_graph(gp)
+            if ns.root:
+                docs = load_service_docs(ns.root)
+        elif ns.root:
+            from graphify.contract_introspect import cross_service_graph
+            G = graph_from_extraction(cross_service_graph(ns.root))
+            docs = load_service_docs(ns.root)
+        else:
+            gp = Path(_default_graph_path())
+            if not gp.exists():
+                print("error: pass a graph.json or --root DIR, or run `graphify extract` first",
+                      file=sys.stderr)
+                sys.exit(1)
+            from graphify.affected import load_graph
+            G = load_graph(gp)
+
+        embedder = None
+        if ns.embed:
+            try:
+                embedder = get_embedder(ns.embed)
+            except (ValueError, ImportError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+        summarizer = LLMSummarizer(backend=ns.summarize) if ns.summarize else None
+        plan = plan_change(
+            G, ns.query, root=ns.root, service_docs=docs,
+            top_services=ns.top_services, top_seeds=ns.top_seeds,
+            depth=ns.depth, embedder=embedder, summarizer=summarizer,
+        )
+        print(format_change_plan(plan))
+    elif cmd == "benchmark-plan":
+        # graphify benchmark-plan "<prd>[;<prd2>…]" --root DIR [--top-services N] [--depth N]
+        # Quantify plan_change (1 graph-backed call) vs a grep/read agent baseline.
+        import argparse as _ap
+
+        p = _ap.ArgumentParser(prog="graphify benchmark-plan")
+        p.add_argument("prds", help="one or more PRDs separated by ';'")
+        p.add_argument("--root", required=True,
+                       help="corpus dir whose immediate subdirs are services")
+        p.add_argument("--top-services", type=int, default=3)
+        p.add_argument("--depth", type=int, default=3)
+        ns = p.parse_args(sys.argv[2:])
+        prds = [s.strip() for s in ns.prds.split(";") if s.strip()]
+        if not prds:
+            print("error: provide at least one PRD", file=sys.stderr)
+            sys.exit(1)
+        root = Path(ns.root)
+        if not root.is_dir():
+            print(f"error: --root is not a directory: {root}", file=sys.stderr)
+            sys.exit(1)
+        from graphify.plan_benchmark import benchmark_plan, format_plan_benchmark
+        res = benchmark_plan(root, prds, top_services=ns.top_services, depth=ns.depth)
+        print(format_plan_benchmark(res))
     elif cmd == "export-chunks":
         # graphify export-chunks [graph.json] --repo R [--embed E] [--dsn D]
         # Embed the graph's symbols and persist code_chunks (pgvector + FTS) for
@@ -4680,7 +4847,7 @@ def main() -> None:
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers] [--bindings] [--cloud-schedulers]",
+                "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers] [--bindings] [--cloud-schedulers] [--taint]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4705,6 +4872,7 @@ def main() -> None:
         cli_schedulers: bool = False
         cli_bindings: bool = False
         cli_cloud_schedulers: bool = False
+        cli_taint: bool = False
         no_cluster = False
         dedup_llm = False
         google_workspace = False
@@ -4818,6 +4986,9 @@ def main() -> None:
                 i += 1
             elif a == "--cloud-schedulers":
                 cli_cloud_schedulers = True
+                i += 1
+            elif a == "--taint":
+                cli_taint = True
                 i += 1
             else:
                 i += 1
@@ -5248,13 +5419,32 @@ def main() -> None:
                   + (f" ({_clby})" if _clby else "")
                   + f"; {_cl.get('resolved', 0)} handler-linked, {_resolved} resolved onto AST nodes")
 
-        # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result + bind_result + cloud_result. Order matters for deduplication: passing AST
+        # Taint (Tier C): PDG + inter-procedural source→sink analysis. Emits the
+        # finding-relevant `statement` nodes + `flows_to` edges (INFERRED) so
+        # blast radius can reach tainted flows and the SDK can render a taint
+        # view. Only the statements on a finding's path are merged (not the whole
+        # PDG) — keeps graph.json lean.
+        taint_result: dict = {"nodes": [], "edges": []}
+        if cli_taint:
+            from graphify.taint import findings_to_graph, taint_scan
+            print("[graphify extract] running taint analysis (PDG + source→sink)...")
+            try:
+                _scan = taint_scan(target)
+            except OSError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            taint_result = findings_to_graph(_scan["findings"])
+            _tby = ", ".join(f"{k}={v}" for k, v in sorted(_scan["stats"]["by_vuln"].items()))
+            print(f"[graphify extract] taint: {_scan['stats']['findings']} finding(s)"
+                  + (f" ({_tby})" if _tby else ""))
+
+        # Merge AST + semantic + pg_result + cargo_result + xsvc_result + sched_result + bind_result + cloud_result + taint_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the
         # semantic side.
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])) + list(bind_result.get("nodes", [])) + list(cloud_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])) + list(bind_result.get("edges", [])) + list(cloud_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])) + list(bind_result.get("nodes", [])) + list(cloud_result.get("nodes", [])) + list(taint_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])) + list(bind_result.get("edges", [])) + list(cloud_result.get("edges", [])) + list(taint_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),

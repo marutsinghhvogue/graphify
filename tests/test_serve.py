@@ -15,6 +15,9 @@ from graphify.serve import (
     _format_blast_radius,
     _format_call_edges,
     _format_discover_seeds,
+    _format_map_services,
+    _format_plan_change,
+    _format_taint,
     _get_trigram_index,
     _infer_context_filters,
     _load_graph,
@@ -826,3 +829,103 @@ def test_format_discover_seeds_pg_reports_unknown_embedder():
     # get_embedder raises ValueError for an unknown provider → surfaced, not crash
     out = serve_mod._format_discover_seeds_pg("q", "repo", embed="word2vec9000")
     assert "unavailable" in out
+
+
+# --- _format_taint (taint findings from flows_to edges) ---
+
+def _taint_graph(tmp_path):
+    from networkx.readwrite import json_graph
+    from graphify.taint import findings_to_graph, taint_source
+    r = taint_source(
+        "def handler(request, cursor):\n"
+        "    uid = request.args.get('id')\n"
+        "    q = 'SELECT ' + uid\n"
+        "    cursor.execute(q)\n",
+        path="views.py",
+    )
+    g = findings_to_graph(r["findings"])
+    data = {"nodes": g["nodes"], "links": g["edges"], "directed": True}
+    return json_graph.node_link_graph(data, edges="links")
+
+
+def test_format_taint_renders_flow(tmp_path):
+    G = _taint_graph(tmp_path)
+    out = _format_taint(G)
+    assert "sql_injection" in out
+    assert "INFERRED" in out
+    assert "source:" in out and "sink:" in out
+    assert "request.args.get" in out
+
+
+def test_format_taint_filter_and_empty(tmp_path):
+    G = _taint_graph(tmp_path)
+    assert "sql_injection" in _format_taint(G, vuln="sql_injection")
+    assert "No taint findings" in _format_taint(G, vuln="command_injection")
+    assert "No taint findings" in _format_taint(nx.DiGraph())
+
+
+# --- map_services (Stage 1: PRD prose -> responsible services) -----------------
+
+def _services_graph() -> nx.DiGraph:
+    """A tiny multi-service graph: nodes stamped with metadata.service the way the
+    contract layer stamps handlers/routes, so map_services can group by service."""
+    G = nx.DiGraph()
+    G.add_node("b_ep", label="GET /invoices/{}", kind="route",
+               source_file="billing/inv.py", metadata={"service": "billing_service"})
+    G.add_node("b_fn", label="getInvoice()", kind="function",
+               source_file="billing/inv.py", metadata={"service": "billing_service"})
+    G.add_node("u_ep", label="POST /users", kind="route",
+               source_file="users/main.py", metadata={"service": "user_service"})
+    G.add_node("u_fn", label="create_user()", kind="function",
+               source_file="users/main.py", metadata={"service": "user_service"})
+    return G
+
+
+def test_format_map_services_ranks_owning_service_top():
+    G = _services_graph()
+    out = _format_map_services(G, "fetch an invoice for an order", top_n=3)
+    lines = [ln for ln in out.splitlines() if ln.startswith("  ")]
+    assert lines and "billing_service" in lines[0]
+
+
+def test_format_map_services_no_signal():
+    G = _services_graph()
+    assert "No responsible service" in _format_map_services(G, "provision kubernetes yaml")
+
+
+def test_format_map_services_without_service_metadata():
+    G = nx.DiGraph()
+    G.add_node("x", label="foo", kind="function", source_file="a.py")
+    assert "No services found" in _format_map_services(G, "anything")
+
+
+# --- plan_change (Stages 1->2->3 composed) -------------------------------------
+
+def _cross_service_graph() -> nx.DiGraph:
+    """billing + order services with a cross-service call (order -> billing), so
+    blast radius from the billing handler reaches the order service."""
+    G = _services_graph()  # billing_service + user_service nodes
+    G.add_node("o_ep", label="GET /orders/{}", kind="route",
+               source_file="orders/o.ts", metadata={"service": "order_service"})
+    G.add_node("o_fn", label="getOrder()", kind="function",
+               source_file="orders/o.ts", source_location="L8",
+               metadata={"service": "order_service"})
+    G.add_edge("o_fn", "o_ep", relation="handles", confidence="EXTRACTED")
+    G.add_edge("o_fn", "b_fn", relation="calls_service", confidence="INFERRED")
+    return G
+
+
+def test_format_plan_change_end_to_end():
+    G = _cross_service_graph()
+    out = _format_plan_change(G, "fetch an invoice for an order", top_services=2, depth=3)
+    assert "Responsible services (Stage 1):" in out
+    assert "billing_service" in out
+    # blast radius from the billing handler crosses into order_service
+    assert "order_service" in out
+    assert "calls_service" in out
+
+
+def test_format_plan_change_no_services():
+    G = nx.DiGraph()
+    G.add_node("x", label="foo", kind="function", source_file="a.py")
+    assert "No services found" in _format_plan_change(G, "anything")
