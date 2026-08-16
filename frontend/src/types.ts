@@ -21,6 +21,32 @@ export interface ReviewQuestion {
   why: string;
 }
 
+export interface TaintStep {
+  stmt_id?: string;
+  line?: number;
+  file?: string | null;
+  func?: string | null;
+  text?: string | null;
+  callee?: string | null;
+}
+
+export interface TaintFinding {
+  vuln: string;
+  category: string;
+  confidence: string;
+  cross_function: boolean;
+  callee?: string | null;
+  source: TaintStep;
+  sink: TaintStep;
+  path: TaintStep[];
+}
+
+export interface TaintResponse {
+  count: number;
+  by_vuln: Record<string, number>;
+  findings: TaintFinding[];
+}
+
 export type AliasMode = "same_as" | "merge";
 
 export interface Alias {

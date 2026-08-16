@@ -236,9 +236,9 @@ def _analyze_fn(view: dict, summaries: dict, rules: list[TaintRule], collect: bo
     def _view(sid: str) -> dict:
         st = by_id.get(sid)
         if st is None:
-            return {"stmt_id": sid, "line": 0, "text": "", "func": ""}
-        return {"stmt_id": sid, "line": st.line,
-                "text": st.text.splitlines()[0].strip()[:160] if st.text else "", "func": st.func}
+            return {"stmt_id": sid, "line": 0, "text": "", "func": "", "file": ""}
+        return {"stmt_id": sid, "line": st.line, "file": st.file, "func": st.func,
+                "text": st.text.splitlines()[0].strip()[:160] if st.text else ""}
 
     def _path(sink_id: str) -> list[dict]:
         chain, cur, seen = [], sink_id, set()
@@ -358,13 +358,55 @@ def analyze_taint_interproc(pdgs: list[dict], rules: list[TaintRule]) -> list[Fi
     return findings
 
 
+def _clean_path(path: list[dict]) -> list[dict]:
+    """Collapse consecutive steps that share a stmt_id (an inter-procedural
+    path-construction artifact) so the rendered flow reads source→…→sink once."""
+    out: list[dict] = []
+    for step in path:
+        if out and out[-1].get("stmt_id") == step.get("stmt_id"):
+            continue
+        out.append(step)
+    return out
+
+
 def _findings_edges(findings: list[Finding]) -> list[dict]:
-    return [{
-        "source": f.source["stmt_id"], "target": f.sink["stmt_id"], "relation": "flows_to",
-        "confidence": f.confidence, "confidence_score": 0.8, "context": "taint",
-        "metadata": {"vuln": f.vuln, "category": f.category,
-                     "callee": f.sink.get("callee"), "cross_function": bool(f.sink.get("callee"))},
-    } for f in findings]
+    """A ``flows_to`` edge per finding (source stmt → sink stmt), carrying the whole
+    finding in metadata so the graph/REST layer can serve it without re-analysis."""
+    out = []
+    for f in findings:
+        out.append({
+            "source": f.source["stmt_id"], "target": f.sink["stmt_id"], "relation": "flows_to",
+            "confidence": f.confidence, "confidence_score": 0.8, "context": "taint",
+            "source_file": f.source.get("file"),
+            "source_location": f"L{f.source.get('line', 0)}",
+            "metadata": {
+                "vuln": f.vuln, "category": f.category, "confidence": f.confidence,
+                "cross_function": bool(f.sink.get("callee")), "callee": f.sink.get("callee"),
+                "source": f.source, "sink": f.sink, "path": _clean_path(f.path),
+            },
+        })
+    return out
+
+
+def findings_to_graph(findings: list[Finding]) -> dict[str, Any]:
+    """Graphify ``{nodes, edges}`` for a list of findings: the statement nodes on
+    each source→sink path + the enriched ``flows_to`` edges. Only the
+    finding-relevant statements (not the whole PDG) — keeps graph.json lean."""
+    nodes: dict[str, dict] = {}
+    for f in findings:
+        steps = list(f.path)
+        # ensure source & sink are present even if the path collapsed them
+        for v in (f.source, f.sink, *steps):
+            sid = v.get("stmt_id")
+            if not sid or sid in nodes:
+                continue
+            nodes[sid] = {
+                "id": sid, "label": v.get("text") or "statement", "file_type": "code",
+                "kind": "statement", "source_file": v.get("file"),
+                "source_location": f"L{v.get('line', 0)}",
+                "metadata": {"func": v.get("func"), "taint": True},
+            }
+    return {"nodes": list(nodes.values()), "edges": _findings_edges(findings)}
 
 
 def taint_source(source: str, *, path: str = "", rules: list[TaintRule] | None = None,

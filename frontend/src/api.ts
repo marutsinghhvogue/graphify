@@ -1,4 +1,11 @@
-import type { Alias, AliasMode, NodeView, ReviewQuestion, UncertainEdge } from "./types";
+import type {
+  Alias,
+  AliasMode,
+  NodeView,
+  ReviewQuestion,
+  TaintResponse,
+  UncertainEdge,
+} from "./types";
 
 // All requests are same-origin: Vite proxies /api and /health to the Flask
 // server in dev (see vite.config.ts), and in production the built assets are
@@ -47,6 +54,11 @@ export const api = {
     ),
 
   questions: () => getJSON<{ questions: ReviewQuestion[] }>("/api/review/questions"),
+
+  taint: (vuln = "") =>
+    getJSON<TaintResponse>(
+      `/api/v1/taint${vuln ? `?vuln=${encodeURIComponent(vuln)}` : ""}`
+    ),
 
   aliases: () => getJSON<{ aliases: Alias[] }>("/api/aliases"),
 

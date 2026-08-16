@@ -3,6 +3,7 @@ import type {
   SeedsResponse,
   StatsResponse,
   SubgraphResponse,
+  TaintResponse,
 } from "./types";
 
 export interface GraphifyClientOptions {
@@ -19,6 +20,7 @@ export interface GraphifyClient {
   subgraph(label: string, depth?: number): Promise<SubgraphResponse>;
   seeds(query: string, top?: number): Promise<SeedsResponse>;
   stats(): Promise<StatsResponse>;
+  taint(vuln?: string): Promise<TaintResponse>;
 }
 
 /** A thin typed client for the graphify v1 REST API. */
@@ -46,5 +48,7 @@ export function createClient(opts: GraphifyClientOptions): GraphifyClient {
     seeds: (query, top = 10) =>
       get<SeedsResponse>(`/api/v1/seeds?q=${q(query)}&top=${top}`),
     stats: () => get<StatsResponse>(`/api/v1/stats`),
+    taint: (vuln) =>
+      get<TaintResponse>(`/api/v1/taint${vuln ? `?vuln=${q(vuln)}` : ""}`),
   };
 }

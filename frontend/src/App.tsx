@@ -3,11 +3,13 @@ import { api } from "./api";
 import QueryExplorer from "./components/QueryExplorer";
 import ReviewQueue from "./components/ReviewQueue";
 import AliasManager from "./components/AliasManager";
+import TaintView from "./components/TaintView";
 
-type Tab = "query" | "review" | "aliases";
+type Tab = "query" | "taint" | "review" | "aliases";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "query", label: "Query explorer" },
+  { id: "taint", label: "Taint" },
   { id: "review", label: "Review queue" },
   { id: "aliases", label: "Alias manager" },
 ];
@@ -47,6 +49,7 @@ export default function App() {
 
       <main>
         {tab === "query" && <QueryExplorer />}
+        {tab === "taint" && <TaintView />}
         {tab === "review" && <ReviewQueue />}
         {tab === "aliases" && <AliasManager />}
       </main>

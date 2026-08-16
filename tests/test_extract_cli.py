@@ -324,6 +324,43 @@ def test_extract_bindings_detects_events_and_external_rules(monkeypatch, tmp_pat
     assert "runs" in rels, "external/LLM rule should add a new construct with no code change"
 
 
+def test_extract_taint_wires_flows_to_edges(monkeypatch, tmp_path):
+    """`extract --taint` must run PDG + taint and merge `flows_to` edges (with the
+    finding in metadata) plus the source/sink `statement` nodes into graph.json."""
+    import json
+
+    (tmp_path / "views.py").write_text(
+        "def handler(request, cursor):\n"
+        "    uid = request.args.get('id')\n"
+        "    q = 'SELECT ' + uid\n"
+        "    cursor.execute(q)\n"
+    )
+    out_dir = tmp_path / "out"
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys, "argv",
+        ["graphify", "extract", str(tmp_path), "--taint",
+         "--no-cluster", "--out", str(out_dir)],
+    )
+
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0), f"unexpected exit code {exc.code}"
+
+    graph = json.loads((out_dir / "graphify-out" / "graph.json").read_text())
+    node_ids = {n["id"] for n in graph.get("nodes", [])}
+    flows = [e for e in graph.get("edges", graph.get("links", []))
+             if e.get("relation") == "flows_to"]
+    assert flows, "expected a flows_to edge from taint analysis"
+    e = flows[0]
+    assert e.get("confidence") == "INFERRED"
+    assert (e.get("metadata") or {}).get("vuln") == "sql_injection"
+    # endpoints resolve to real statement nodes (no dangling stubs)
+    assert e["source"] in node_ids and e["target"] in node_ids
+
+
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     """`extract --out DIR` routes every artifact to DIR/graphify-out/ and the
     scanned project must not grow a graphify-out/ (or anything else) beside

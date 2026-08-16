@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient, type GraphifyClientOptions } from "./client";
-import type { ImpactResponse, SeedsResponse, SubgraphResponse } from "./types";
+import type {
+  ImpactResponse,
+  SeedsResponse,
+  SubgraphResponse,
+  TaintResponse,
+} from "./types";
 
 export interface AsyncState<T> {
   data?: T;
@@ -68,5 +73,17 @@ export function useSeeds(
   return useAsync<SeedsResponse>(
     () => (query ? client.seeds(query, top) : Promise.resolve({ query: "", seeds: [] })),
     [opts.apiBase, opts.apiKey, query, top],
+  );
+}
+
+/** Taint findings (source→sink flows), optionally filtered to one vuln. */
+export function useTaint(
+  opts: GraphifyClientOptions,
+  vuln?: string | null,
+): AsyncState<TaintResponse> {
+  const client = useGraphifyClient(opts);
+  return useAsync<TaintResponse>(
+    () => client.taint(vuln || undefined),
+    [opts.apiBase, opts.apiKey, vuln],
   );
 }

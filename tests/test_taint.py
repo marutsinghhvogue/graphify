@@ -8,6 +8,7 @@ import pytest
 from graphify.taint import (
     TAINT_RULES_FILENAME,
     TaintRuleError,
+    findings_to_graph,
     load_taint_rules,
     taint_scan,
     taint_source,
@@ -154,3 +155,35 @@ def test_cross_file_flow(tmp_path):
     )
     scan = taint_scan(tmp_path)
     assert scan["stats"]["by_vuln"].get("sql_injection") == 1
+
+
+# --- wiring findings into the graph (flows_to + statement nodes) ---
+
+def test_findings_to_graph_emits_flows_to_and_nodes():
+    r = taint_source("def f(request, cursor):\n"
+                     "    uid = request.args.get('id')\n"
+                     "    q = 'SELECT ' + uid\n"
+                     "    cursor.execute(q)\n", path="v.py")
+    g = findings_to_graph(r["findings"])
+    flows = [e for e in g["edges"] if e["relation"] == "flows_to"]
+    assert len(flows) == 1
+    meta = flows[0]["metadata"]
+    assert meta["vuln"] == "sql_injection"
+    assert meta["source"]["file"] == "v.py" and meta["source"]["line"] == 2
+    assert meta["sink"]["line"] == 4
+    # every edge endpoint has a backing statement node (no dangling stubs)
+    node_ids = {n["id"] for n in g["nodes"]}
+    for e in g["edges"]:
+        assert e["source"] in node_ids and e["target"] in node_ids
+    assert all(n["kind"] == "statement" for n in g["nodes"])
+
+
+def test_findings_to_graph_dedupes_path_steps():
+    # cross-function inline source: the flow's path must not repeat a stmt
+    r = taint_source("def get_id(request):\n    return request.args.get('id')\n\n"
+                     "def handler(request, cursor):\n    cursor.execute(get_id(request))\n",
+                     path="v.py")
+    g = findings_to_graph(r["findings"])
+    path = g["edges"][0]["metadata"]["path"]
+    ids = [s["stmt_id"] for s in path]
+    assert ids == list(dict.fromkeys(ids))  # no consecutive duplicates

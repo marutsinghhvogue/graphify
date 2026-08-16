@@ -58,3 +58,29 @@ export interface StatsResponse {
   communities: number;
   confidence: Record<string, number>;
 }
+
+export interface TaintStep {
+  stmt_id?: string;
+  line?: number;
+  file?: string | null;
+  func?: string | null;
+  text?: string | null;
+  callee?: string | null;
+}
+
+export interface TaintFinding {
+  vuln: string; // sql_injection | command_injection | code_injection | ...
+  category: string; // untrusted-input | pii | ...
+  confidence: string; // INFERRED
+  cross_function: boolean;
+  callee?: string | null;
+  source: TaintStep;
+  sink: TaintStep;
+  path: TaintStep[];
+}
+
+export interface TaintResponse {
+  count: number;
+  by_vuln: Record<string, number>;
+  findings: TaintFinding[];
+}

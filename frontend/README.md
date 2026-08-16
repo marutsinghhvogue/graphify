@@ -1,8 +1,11 @@
 # Graphify UI
 
-React + TypeScript (Vite) dashboard over the Graphify JSON API. Three views:
+React + TypeScript (Vite) dashboard over the Graphify JSON API. Four views:
 
 - **Query explorer** — traverse the graph, list callers/callees.
+- **Taint** — source→sink findings (SQL/command/code injection) grouped by vuln,
+  each showing the flow with `file:line`. Populated when the graph is built with
+  `graphify extract --taint` (findings persist as `flows_to` edges).
 - **Review queue** — INFERRED/AMBIGUOUS edges and auto-generated verification
   questions; confirm a real equivalence to promote it to a deterministic alias.
 - **Alias manager** — list and add entity aliases (doc `User` ≡ code `Customer`).

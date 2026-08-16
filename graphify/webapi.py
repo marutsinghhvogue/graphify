@@ -14,6 +14,7 @@ v1 REST API (structured JSON, built for an embeddable UI):
   GET  /api/v1/seeds?q=...&top=10           Stage 2: prose -> ranked seed symbols
   GET  /api/v1/subgraph?label=...&depth=1   nodes + edges for graph viz
   GET  /api/v1/stats                        node/edge/community/confidence counts
+  GET  /api/v1/taint?vuln=...               taint findings (from `flows_to` edges)
 
 Embedding controls (env): ``GRAPHIFY_API_KEY`` gates every endpoint but /health
 (via ``X-API-Key`` or ``Authorization: Bearer``); ``GRAPHIFY_CORS_ORIGINS`` (comma
@@ -64,6 +65,33 @@ def _impact_view(G, hit) -> dict:
     view.update(depth=hit.depth, via_relation=hit.via_relation,
                 confidence=hit.confidence or "EXTRACTED")
     return view
+
+
+def _taint_findings(G, *, vuln: str = "") -> list[dict]:
+    """Reconstruct taint findings from the graph's ``flows_to`` edges. Each such
+    edge (emitted by ``graphify extract --taint``) carries the whole finding in
+    its metadata, so this is a read — no re-analysis. Optionally filter by vuln."""
+    out: list[dict] = []
+    for u, v, d in G.edges(data=True):
+        if d.get("relation") != "flows_to":
+            continue
+        meta = d.get("metadata") or {}
+        if vuln and meta.get("vuln") != vuln:
+            continue
+        out.append({
+            "vuln": meta.get("vuln"),
+            "category": meta.get("category"),
+            "confidence": meta.get("confidence") or d.get("confidence") or "INFERRED",
+            "cross_function": bool(meta.get("cross_function")),
+            "callee": meta.get("callee"),
+            "source": meta.get("source") or {"stmt_id": u},
+            "sink": meta.get("sink") or {"stmt_id": v},
+            "path": meta.get("path") or [],
+        })
+    # Most severe / most-hops first is subjective; stable sort by vuln then source
+    # line keeps the list deterministic for the UI.
+    out.sort(key=lambda f: (f.get("vuln") or "", (f.get("source") or {}).get("line", 0)))
+    return out
 
 
 def _subgraph(G, seed: str, *, depth: int) -> dict:
@@ -320,6 +348,18 @@ def create_app(graph_path: str, root: str | None = None):
         communities = _serve._communities_from_graph(G)
         return jsonify({"nodes": G.number_of_nodes(), "edges": G.number_of_edges(),
                         "communities": len(communities), "confidence": confs})
+
+    @app.get("/api/v1/taint")
+    def v1_taint():
+        """Taint findings (source→sink flows) from the graph's `flows_to` edges.
+        Present only when the graph was built with `graphify extract --taint`."""
+        vuln = (request.args.get("vuln") or "").strip()
+        G = _graph()
+        findings = _taint_findings(G, vuln=vuln)
+        by_vuln: dict[str, int] = {}
+        for f in findings:
+            by_vuln[f["vuln"]] = by_vuln.get(f["vuln"], 0) + 1
+        return jsonify({"count": len(findings), "by_vuln": by_vuln, "findings": findings})
 
     return app
 

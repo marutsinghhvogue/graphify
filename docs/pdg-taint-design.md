@@ -28,9 +28,18 @@ security-aware.
   tainted-arg→callee-sink, source-wrapper return values, transitivity through
   chains, sanitizing callees, and cross-file flows (callee resolved by name).
   Taint is a *set* of tags per variable, so a param use can't mask a real source.
+- **v3 (built):** **graph + surface integration of `flows_to`** — `graphify
+  extract --taint` runs the scan and merges each finding into `graph.json` as a
+  `flows_to` edge (source stmt → sink stmt, INFERRED, whole finding in metadata)
+  plus the finding's path `statement` nodes (only the path, not the whole PDG —
+  keeps graph.json lean). The persisted findings are then served three ways off
+  the *graph* (no re-analysis): the MCP `taint` tool (`serve._format_taint`), the
+  REST endpoint `GET /api/v1/taint` (`webapi._taint_findings`), and the React
+  SDK's `<GraphifyTaint>` component / `useTaint` hook.
 - **Later:** control dependence (the PDG's other half), field/index sensitivity,
   more languages, precise cross-file callee resolution (imports vs. name-match),
-  and graph/MCP/SDK integration of `flows_to`.
+  and adding `flows_to` to `blast_radius`'s default relation set (security-aware
+  impact) once the precision/recall trade-off is characterized.
 
 Honest limitation of v1: last-write def-use over statement order is exact for
 straight-line code and approximate around branches/loops (a CFG-based
@@ -79,13 +88,20 @@ Loaded from built-ins + `.graphify_taint_rules.json` at the scan root; validated
 
 # Surface
 
-- MCP tool **`taint`** — "does untrusted input reach a dangerous sink? show the
-  flow," returning source→…→sink with file:line + vuln + confidence.
-- MCP tool **`pdg_query`** — statement-level "what does this value depend on /
-  affect."
-- CLI **`graphify taint <path>`** with `--report` (SARIF-style findings list).
-- Edges land in the confidence-tiered graph, so `blast_radius` can reach tainted
-  flows and the React SDK can render a taint view.
+- CLI **`graphify taint <path>`** — standalone scan, renders source→…→sink flows
+  (also `--json`).
+- CLI **`graphify extract --taint`** — merge findings into `graph.json` as
+  `flows_to` edges + path `statement` nodes (the wiring that feeds the surfaces
+  below off the persisted graph).
+- MCP tool **`taint`** (`vuln` filter) — "does untrusted input reach a dangerous
+  sink? show the flow," reading the graph's `flows_to` edges (file:line + vuln +
+  confidence). No re-analysis at query time.
+- REST **`GET /api/v1/taint?vuln=…`** — the same findings as structured JSON
+  (`{count, by_vuln, findings[]}`) for the embeddable UI.
+- React SDK **`<GraphifyTaint>`** / **`useTaint`** — severity-grouped findings
+  with the source→…→sink flow, over the REST endpoint.
+- Later: MCP `pdg_query` (statement-level "what does this value depend on /
+  affect"); adding `flows_to` to `blast_radius` so impact is security-aware.
 
 # Example finding
 

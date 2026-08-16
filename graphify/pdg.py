@@ -46,6 +46,7 @@ class Stmt:
     uses: list[str]
     node_type: str
     func: str
+    file: str = ""
     calls: list = field(default_factory=list)              # list[CallSite]
     params: list[str] = field(default_factory=list)        # set on the function_entry stmt
     tainted: dict[str, Any] = field(default_factory=dict)  # filled by taint.py
@@ -245,7 +246,7 @@ def _analyze_function(fn, src: bytes, path: str, findings_ns: str) -> tuple[list
         return f"stmt_{findings_ns}_{name}_{i}".lower().replace(" ", "_")
 
     entry = Stmt(sid(0), (fn.start_point[0] + 1), f"def {name}(...)", list(param_names), [],
-                 "function_entry", name, params=list(param_names))
+                 "function_entry", name, file=path, params=list(param_names))
     stmts.append(entry)
     for p in param_names:
         last_def[p] = entry.id
@@ -254,7 +255,7 @@ def _analyze_function(fn, src: bytes, path: str, findings_ns: str) -> tuple[list
         defs, uses = _stmt_def_use(st)
         text = _read(src, st) if st.end_byte > st.start_byte else ""
         s = Stmt(sid(i), st.start_point[0] + 1, text, defs, uses, st.type, name,
-                 calls=_stmt_calls(src, st))
+                 file=path, calls=_stmt_calls(src, st))
         stmts.append(s)
         for u in uses:
             d = last_def.get(u)

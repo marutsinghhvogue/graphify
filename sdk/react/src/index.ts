@@ -5,11 +5,13 @@ export {
   useImpact,
   useSubgraph,
   useSeeds,
+  useTaint,
   type AsyncState,
 } from "./hooks";
 export { GraphifyImpact, type GraphifyImpactProps } from "./GraphifyImpact";
 export { GraphifySubgraph, type GraphifySubgraphProps } from "./GraphifySubgraph";
 export { GraphifySeeds, type GraphifySeedsProps } from "./GraphifySeeds";
+export { GraphifyTaint, type GraphifyTaintProps } from "./GraphifyTaint";
 export type {
   NodeView,
   ImpactHit,
@@ -19,4 +21,7 @@ export type {
   Seed,
   SeedsResponse,
   StatsResponse,
+  TaintStep,
+  TaintFinding,
+  TaintResponse,
 } from "./types";

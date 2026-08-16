@@ -31,6 +31,10 @@ const conn = { apiBase: "https://graph.your-co.com", apiKey: import.meta.env.VIT
 
 // Stage 2: prose → seed symbols; feed a pick into GraphifyImpact
 <GraphifySeeds {...conn} onSelect={(s) => setSymbol(s.name)} />
+
+// Taint: untrusted input → dangerous sink flows (needs `extract --taint`)
+import { GraphifyTaint } from "graphify-react";
+<GraphifyTaint {...conn} onSelect={(f) => console.log(f.vuln, f.sink.file)} />
 ```
 
 Prefer data over UI? Use the hooks:
@@ -48,8 +52,12 @@ const { data, loading, error } = useImpact(conn, "rollup_daily", 2);
 | `<GraphifyImpact>` | Blast radius as a grouped, confidence-tiered list + `<GraphifySubgraph>` |
 | `<GraphifySubgraph>` | Dependency-free SVG graph around a symbol (BFS-layered) |
 | `<GraphifySeeds>` | Prose → ranked seed symbols (Stage 2) |
-| `useImpact` / `useSubgraph` / `useSeeds` | Data-only hooks |
+| `<GraphifyTaint>` | Taint findings (source→…→sink) grouped by vuln, severity-colored |
+| `useImpact` / `useSubgraph` / `useSeeds` / `useTaint` | Data-only hooks |
 | `createClient` | Framework-free typed client for `/api/v1` |
+
+`<GraphifyTaint>` reads `/api/v1/taint`, which is populated when the graph is built
+with `graphify extract --taint` (findings persist as `flows_to` edges).
 
 All take `{ apiBase, apiKey? }`. Confidence tiers are colored EXTRACTED (green) /
 INFERRED (amber) / AMBIGUOUS (red) — recall-first, so nothing is silently dropped.

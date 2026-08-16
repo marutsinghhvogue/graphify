@@ -163,3 +163,55 @@ def test_api_key_gates_endpoints(graph_file):
 def test_cors_header_present(client):
     r = client.get("/api/v1/stats", headers={"Origin": "http://host.app"})
     assert r.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+@pytest.fixture
+def taint_graph_file(tmp_path):
+    """A graph carrying taint `flows_to` edges, as `extract --taint` would emit."""
+    from graphify.taint import findings_to_graph, taint_scan
+
+    (tmp_path / "db.py").write_text("def run_query(cursor, sql):\n    cursor.execute(sql)\n")
+    (tmp_path / "views.py").write_text(
+        "from db import run_query\n"
+        "def handler(request, cursor):\n"
+        "    uid = request.args.get('id')\n"
+        "    q = 'SELECT ' + uid\n"
+        "    run_query(cursor, q)\n"
+    )
+    extraction = findings_to_graph(taint_scan(tmp_path)["findings"])
+    G = build_from_json(extraction, directed=True, root=tmp_path)
+    data = json_graph.node_link_data(G, edges="links")
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path, tmp_path
+
+
+@pytest.fixture
+def taint_client(taint_graph_file):
+    path, root = taint_graph_file
+    app = create_app(str(path), root=str(root))
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_v1_taint_lists_findings(taint_client):
+    body = taint_client.get("/api/v1/taint").get_json()
+    assert body["count"] == 1
+    assert body["by_vuln"] == {"sql_injection": 1}
+    f = body["findings"][0]
+    assert f["vuln"] == "sql_injection" and f["category"] == "untrusted-input"
+    assert f["confidence"] == "INFERRED"
+    assert f["cross_function"] is True and f["callee"] == "run_query"
+    assert "request.args.get" in f["source"]["text"]
+    assert f["sink"]["callee"] == "run_query"
+
+
+def test_v1_taint_filter_by_vuln(taint_client):
+    assert taint_client.get("/api/v1/taint?vuln=sql_injection").get_json()["count"] == 1
+    assert taint_client.get("/api/v1/taint?vuln=command_injection").get_json()["count"] == 0
+
+
+def test_v1_taint_empty_when_no_flows(client):
+    # the default fixture graph has no flows_to edges
+    body = client.get("/api/v1/taint").get_json()
+    assert body["count"] == 0 and body["findings"] == []
