@@ -2218,7 +2218,8 @@ def main() -> None:
         print("    --force                 allow overwrite even if node count drops")
         print("  plan \"<text>\"           PRD->impact end to end: responsible services -> scoped seeds ->")
         print("                          cross-service blast radius [graph] [--root DIR] [--top-services N]")
-        print("                          [--top-seeds N] [--depth N] [--embed E]")
+        print("                          [--top-seeds N] [--depth N] [--embed E] [--codegraph]")
+        print("                          --codegraph: build from CodeGraph indexes + stitch our x-service edges")
         print("  benchmark-plan \"<prds>\"  quantify plan vs a grep/read agent (tool calls + tokens saved)")
         print("                          --root DIR; PRDs separated by ';' [--top-services N] [--depth N]")
         print("  services \"<text>\"       Stage 1: prose requirement -> ranked services responsible for it")
@@ -3364,6 +3365,10 @@ def main() -> None:
         p.add_argument("--summarize", default=None, metavar="BACKEND",
                        help="LLM backend (claude|openai|gemini|…) to author a capability "
                             "sentence per service, folded into Stage-1 matching (default: off)")
+        p.add_argument("--codegraph", action="store_true",
+                       help="build the graph from CodeGraph indexes (.codegraph/codegraph.db under "
+                            "--root) instead of graphify's own extractor, then stitch our "
+                            "cross-service edges on top (requires --root)")
         ns = p.parse_args(sys.argv[2:])
         from graphify.change_plan import (
             format_change_plan,
@@ -3374,7 +3379,19 @@ def main() -> None:
         from graphify.service_profiles import LLMSummarizer, load_service_docs
 
         docs: dict = {}
-        if ns.graph:
+        if ns.codegraph:
+            if not ns.root:
+                print("error: --codegraph requires --root DIR (where the .codegraph indexes live)",
+                      file=sys.stderr)
+                sys.exit(1)
+            from graphify.codegraph_ingest import cross_service_extraction_from_codegraph
+            try:
+                G = graph_from_extraction(cross_service_extraction_from_codegraph(ns.root))
+            except FileNotFoundError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            docs = load_service_docs(ns.root)
+        elif ns.graph:
             gp = Path(ns.graph).resolve()
             if not gp.exists():
                 print(f"error: graph file not found: {gp}", file=sys.stderr)
