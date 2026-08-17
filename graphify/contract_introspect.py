@@ -95,23 +95,41 @@ def _join(prefix: str, path: str) -> str:
 # ── enclosing-function tracking ──────────────────────────────────────────────
 
 _PY_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(")
+# TS/JS definition forms, tried most-specific first so the broad class-method form
+# doesn't mis-capture the leading keyword of an `export async function foo(` line:
+#   1. a `function` declaration (export/default/async/generator variants),
+#   2. an arrow function bound to a const/let/var (export variant), and
+#   3. a class method / object-shorthand (`name(` — the original, broad, form).
+_TS_FUNCTION = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\(")
+_TS_ARROW = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*(?::[^={]+)?=>"
+)
 _TS_METHOD = re.compile(r"^\s*(?:public |private |protected )?(?:static )?(?:async )?(\w+)\s*\(")
 _JAVA_METHOD = re.compile(r"^\s*(?:public|private|protected)\s+[\w<>\[\], ?]+\s+(\w+)\s*\(")
 _NON_FN = {"if", "for", "while", "switch", "catch", "return", "constructor", "class", "new"}
 
 
-def _defs_for(lang: str) -> re.Pattern:
-    return {"python": _PY_DEF, "ts": _TS_METHOD, "java": _JAVA_METHOD}[lang]
+def _defs_for(lang: str) -> tuple[re.Pattern, ...]:
+    return {
+        "python": (_PY_DEF,),
+        "ts": (_TS_FUNCTION, _TS_ARROW, _TS_METHOD),
+        "java": (_JAVA_METHOD,),
+    }[lang]
 
 
 def _function_index(lines: list[str], lang: str) -> list[tuple[int, str]]:
-    """Ordered (line_no, name) of function/method definitions in a file."""
-    pat = _defs_for(lang)
+    """Ordered (line_no, name) of function/method definitions in a file. Each line is
+    matched against the language's def forms in priority order; the first that hits
+    wins, so specific forms (``function``/arrow) beat the broad method form."""
+    pats = _defs_for(lang)
     out: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
-        m = pat.match(line)
-        if m and m.group(1) not in _NON_FN:
-            out.append((i, m.group(1)))
+        for pat in pats:
+            m = pat.match(line)
+            if m:
+                if m.group(1) not in _NON_FN:
+                    out.append((i, m.group(1)))
+                break
     return out
 
 

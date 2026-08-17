@@ -49,6 +49,46 @@ def test_fixture_cross_service_edges():
     assert ("order_service", "billing_service", "/invoices/{}") in resolved
 
 
+def _producer_consumer(tmp_path, consumer_src: str):
+    """Two services: a FastAPI producer of /things/{id} and a TS consumer that
+    fetches it. Returns the cross_service_graph over them."""
+    (tmp_path / "prod").mkdir()
+    (tmp_path / "prod" / "main.py").write_text(
+        'from fastapi import FastAPI\napp = FastAPI()\n'
+        '@app.get("/things/{id}")\ndef get_thing(id):\n    return {}\n'
+    )
+    (tmp_path / "cons").mkdir()
+    (tmp_path / "cons" / "h.ts").write_text(consumer_src)
+    return cross_service_graph(tmp_path)
+
+
+def test_ts_exported_function_consumer_is_attributed(tmp_path):
+    # regression: `export async function` was invisible to the TS def scanner, so
+    # the fetch was attributed to <module> and never reconciled. It must resolve to
+    # the enclosing function name now.
+    g = _producer_consumer(
+        tmp_path,
+        "export async function doWork(id) {\n"
+        "  await fetch(`http://prod/things/${id}`);\n"
+        "}\n",
+    )
+    cs = [e for e in g["edges"] if e["relation"] == "calls_service"]
+    assert cs and any(e["source"] == "svc_cons_fn_dowork" for e in cs)
+    labels = {n["label"] for n in g["nodes"] if n.get("kind") == "function"}
+    assert "doWork()" in labels and "<module>()" not in labels
+
+
+def test_ts_arrow_function_consumer_is_attributed(tmp_path):
+    g = _producer_consumer(
+        tmp_path,
+        "export const doWork = async (id) => {\n"
+        "  await fetch(`http://prod/things/${id}`);\n"
+        "};\n",
+    )
+    cs = [e for e in g["edges"] if e["relation"] == "calls_service"]
+    assert cs and any(e["source"] == "svc_cons_fn_dowork" for e in cs)
+
+
 def test_fixture_all_cross_service_edges_are_inferred_not_extracted():
     g = cross_service_graph(FIXTURE)
     xs = [e for e in g["edges"] if e["relation"] == "calls_service"]
