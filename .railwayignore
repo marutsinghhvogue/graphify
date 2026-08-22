@@ -1,0 +1,25 @@
+# Keep the Railway upload/build context small. The Dockerfile only needs
+# pyproject.toml, README.md, LICENSE, graphify/, and deploy/.
+.venv/
+.git/
+build/
+dist/
+worked/
+frontend/
+sdk/
+tests/
+docs/
+graphify-out/
+graphify/graphify-out/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+uv.lock
+CHANGELOG.md
+.DS_Store
+graphifyy.egg-info/
+.codeatlas/
+tools/
+build/

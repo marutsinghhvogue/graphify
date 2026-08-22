@@ -43,3 +43,4 @@ paper/
 
 # CodeAtlas local index (large binary state)
 .codeatlas/
+deploy/.railway-secret
