@@ -200,6 +200,29 @@ graphify search-chunks "nightly rollup" --repo billing --embed openai
 > The embedder used at `export-chunks` time must match the one used at
 > `search-chunks` / `discover_seeds_pg` time (same provider → comparable vectors).
 
+### Multiple repositories
+
+Every Postgres table is **keyed by `repo`**, and every PG tool takes `--repo`, so
+one database serves a whole estate. Two modes:
+
+```bash
+# Independent repos — populate each, query each by name (no cross-talk):
+graphify export-pg billing/graph.json  --repo billing --source graphify
+graphify export-pg payments/graph.json --repo payments --source graphify
+graphify blast-radius <seed> --repo billing --depth 3
+
+# Cross-service estate — blast radius that crosses service boundaries.
+# blast_radius_pg traverses within ONE repo value, so stitch the services into
+# one graph (calls_service edges) and export under a single estate name:
+graphify extract --cross-service ./estate           # subdir-per-service → calls_service edges
+graphify export-pg ./graphify-out/graph.json --repo estate --source graphify
+graphify blast-radius <seed> --repo estate --depth 3
+```
+
+For the file-graph tools (not Postgres), `graphify global add <graph.json> --as
+<repo>` maintains a merged multi-repo graph; `graphify plan --root <dir>` (or
+`--codegraph`) computes cross-service blast radius directly.
+
 ---
 
 ## 8. Confidence tiers — what to trust
@@ -217,6 +240,25 @@ is never silently missed. Filter the output to EXTRACTED when you need certainty
 
 ---
 
+## 9. Deploy as a service (Railway)
+
+Run Graphify as an always-on service so agents and browsers query a **shared**
+graph instead of building one locally. One image, two roles over the same
+`graph.json`, backed by Postgres/pgvector:
+
+```
+Postgres (+ pgvector)      multi-repo store (symbols, code_edges, code_chunks)
+  ├─ graphify-api  (Flask)  REST  /api/v1/{impact,seeds,subgraph,stats,taint}
+  └─ graphify-mcp  (HTTP)   MCP streamable-http at /mcp
+```
+
+The `api` role populates Postgres on boot (`export-pg` + `export-chunks`,
+idempotent); the `*_pg` MCP tools then serve **any repo** in the DB. Full setup,
+env-var contract, verification, and multi-repo loading:
+[deployment-railway.md](./deployment-railway.md).
+
+---
+
 ## Requirements at a glance
 
 | Feature | Needs |
@@ -225,8 +267,12 @@ is never silently missed. Filter the output to EXTRACTED when you need certainty
 | cloud YAML (k8s/serverless) | `pip install pyyaml` |
 | hybrid seeds (`--embed openai/gemini`), `learn-bindings` | provider API key |
 | Postgres persistence & query (`export-*`, `blast-radius`, `search-chunks`) | `graphifyy[postgres]` + pgvector DB |
+| Serve as a hosted service (REST + MCP) | `graphifyy[mcp,web,postgres]` + a container host |
 
 ## See also
+- [deployment-railway.md](./deployment-railway.md) — deploy as a hosted REST + MCP service (multi-repo)
+- [POSTGRES_CODEGRAPH.md](./POSTGRES_CODEGRAPH.md) — the multi-repo Postgres schema & write model
+- [cross-service-impact-analysis.md](./cross-service-impact-analysis.md) — how cross-service edges are derived
 - [binding-rules.md](./binding-rules.md) — the pluggable rule engine
 - [scheduler-detection-design.md](./scheduler-detection-design.md) — Tier A + B design
 - [architecture.html](./architecture.html) — the whole system at a glance

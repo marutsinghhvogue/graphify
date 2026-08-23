@@ -93,6 +93,23 @@ CREATE TABLE code_chunks (
 - **Edges** are replaced per **`(repo, source)`** — re-exporting the `scip` edges
   replaces only `scip` edges, leaving `contract` / `treesitter` intact.
 
+### Multiple repositories
+
+`repo` is the leading column of every table (and every index), so one database is
+a **multi-repo store** with no cross-talk: `export-pg --repo A` and `--repo B`
+coexist, and `blast_radius_pg` / `discover_seeds_pg` scope to one `repo` value.
+
+- **Independent repos** — populate and query each by name.
+- **Cross-service estate** — `blast_radius_pg` traverses within a single `repo`
+  (`WHERE e.repo = %(repo)s`), so for reachability that crosses service
+  boundaries, export a **stitched estate graph** (one that carries `calls_service`
+  edges — `graphify extract --cross-service`, `global_graph`, or a CodeGraph
+  ingest) under a single estate `repo` name. The `calls_service` / `handles`
+  edge types are already part of the traversal set.
+
+See [deployment-railway.md](./deployment-railway.md) for loading multiple repos
+into a live deployment.
+
 ## Accepted mitigations
 
 These are the known limits of "Postgres as the code-graph store," accepted with

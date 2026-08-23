@@ -394,6 +394,10 @@ docker run -p 8080:8080 -v "$(pwd)/graphify-out:/data" graphify \
 > python3 -m venv .venv && .venv/bin/pip install "graphifyy[mcp]"
 > ```
 
+### Deploy the full stack (REST + MCP + Postgres, multi-repo)
+
+For an always-on, **multi-repository** service — a Flask REST API (`/api/v1/impact|seeds|subgraph|stats|taint`) **and** the MCP HTTP server, both backed by Postgres/pgvector — see **[deployment-railway.md](docs/deployment-railway.md)**. The Postgres store is keyed by `repo`, so one deployment serves an entire estate: populate each repo with `export-pg --repo <name>` (+ `export-chunks` for semantic seeds) and query any of them with `blast_radius_pg` / `discover_seeds_pg`. For blast radius that crosses service boundaries, export a stitched cross-service graph (`extract --cross-service`) under one estate name.
+
 ---
 
 ## Environment variables
@@ -662,6 +666,9 @@ graphify label ./my-project --backend=openai --model gpt-4o   # force a specific
 
 - [How it works](docs/how-it-works.md) — the extraction pipeline, community detection, confidence scoring, benchmarks
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module breakdown, how to add a language
+- [Code-intelligence guide](docs/code-intelligence-guide.md) — build → seeds → blast-radius, cross-service, and multi-repo Postgres
+- [Deploy as a service](docs/deployment-railway.md) — hosted REST + MCP over Postgres/pgvector, serving one or many repos
+- [Postgres CodeGraph](docs/POSTGRES_CODEGRAPH.md) — the multi-repo schema, write model, and accepted mitigations
 - [Optional integrations](docs/docker-mcp-sqlite.md) — Docker MCP Toolkit + SQLite
 
 ---
