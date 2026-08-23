@@ -4474,6 +4474,7 @@ def main() -> None:
             print("            [--lang auto|zh-CN|en] [--max-sections N] [--diagram-scale N]", file=sys.stderr)
             print("  obsidian  [--graph PATH] [--labels PATH] [--dir PATH]", file=sys.stderr)
             print("  wiki      [--graph PATH] [--labels PATH]", file=sys.stderr)
+            print("            [--hierarchical] [--max-depth N] [--max-nodes-per-module N] [--min-module-size N] [--summarize BACKEND]", file=sys.stderr)
             print("  svg       [--graph PATH] [--labels PATH]", file=sys.stderr)
             print("  graphml   [--graph PATH]", file=sys.stderr)
             print("  neo4j     [--graph PATH] [--push URI] [--user U] [--password P]", file=sys.stderr)
@@ -4513,6 +4514,14 @@ def main() -> None:
             os.environ.get("FALKORDB_PASSWORD") if subcmd == "falkordb"
             else os.environ.get("NEO4J_PASSWORD")
         ) or None
+        # Hierarchical wiki (issue #9): recursive module tree instead of a flat
+        # one-article-per-community wiki. Off by default to preserve the existing
+        # `export wiki` behaviour.
+        wiki_hierarchical = False
+        wiki_max_depth = 2
+        wiki_max_nodes = 40
+        wiki_min_nodes = 5
+        wiki_summarize: str | None = None
         i = 0
         while i < len(args):
             a = args[i]
@@ -4520,6 +4529,16 @@ def main() -> None:
                 graph_path = Path(args[i + 1])
                 graph_path_explicit = True
                 i += 2
+            elif a == "--hierarchical" and subcmd == "wiki":
+                wiki_hierarchical = True; i += 1
+            elif a == "--max-depth" and subcmd == "wiki" and i + 1 < len(args):
+                wiki_max_depth = int(args[i + 1]); i += 2
+            elif a == "--max-nodes-per-module" and subcmd == "wiki" and i + 1 < len(args):
+                wiki_max_nodes = int(args[i + 1]); i += 2
+            elif a == "--min-module-size" and subcmd == "wiki" and i + 1 < len(args):
+                wiki_min_nodes = int(args[i + 1]); i += 2
+            elif a == "--summarize" and subcmd == "wiki" and i + 1 < len(args):
+                wiki_summarize = args[i + 1]; i += 2
             elif a == "--labels" and i + 1 < len(args):
                 labels_path = Path(args[i + 1])
                 labels_path_explicit = True
@@ -4717,8 +4736,6 @@ def main() -> None:
             print(f"Open {obsidian_dir}/ as a vault in Obsidian.")
 
         elif subcmd == "wiki":
-            from graphify.analyze import god_nodes as _god_nodes
-            from graphify.wiki import to_wiki as _to_wiki
             if not communities:
                 print(
                     "error: .graphify_analysis.json is missing or empty — refusing to export wiki to prevent data loss.\n"
@@ -4726,13 +4743,41 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            if not gods_data:
-                gods_data = _god_nodes(G)
-            n = _to_wiki(G, communities, str(out_dir / "wiki"),
-                         community_labels=labels or None, cohesion=cohesion or None,
-                         god_nodes_data=gods_data)
-            print(f"Wiki: {n} articles written to {out_dir}/wiki/")
-            print(f"  {out_dir}/wiki/index.md  ->  agent entry point")
+            if wiki_hierarchical:
+                from graphify.hierarchy import to_hierarchical_wiki as _to_hwiki
+                summarizer = None
+                if wiki_summarize:
+                    from graphify.llm import _call_llm as _llm
+
+                    def summarizer(title, node_labels, sources, _b=wiki_summarize):
+                        prompt = (
+                            "In one sentence, describe what this code module does. "
+                            f"Module: {title}. Key symbols: {', '.join(map(str, node_labels[:12]))}. "
+                            f"Files: {', '.join(sources[:8])}."
+                        )
+                        try:
+                            return " ".join((_llm(prompt, backend=_b, max_tokens=80) or "").split())[:280]
+                        except Exception:
+                            return ""
+                n = _to_hwiki(G, communities, str(out_dir / "wiki"),
+                              community_labels=labels or None,
+                              max_depth=wiki_max_depth,
+                              max_nodes_per_module=wiki_max_nodes,
+                              min_module_size=wiki_min_nodes,
+                              summarizer=summarizer)
+                print(f"Hierarchical wiki: {n} module articles written to {out_dir}/wiki/")
+                print(f"  {out_dir}/wiki/overview.md      ->  agent entry point")
+                print(f"  {out_dir}/wiki/module_tree.json ->  navigable module tree")
+            else:
+                from graphify.analyze import god_nodes as _god_nodes
+                from graphify.wiki import to_wiki as _to_wiki
+                if not gods_data:
+                    gods_data = _god_nodes(G)
+                n = _to_wiki(G, communities, str(out_dir / "wiki"),
+                             community_labels=labels or None, cohesion=cohesion or None,
+                             god_nodes_data=gods_data)
+                print(f"Wiki: {n} articles written to {out_dir}/wiki/")
+                print(f"  {out_dir}/wiki/index.md  ->  agent entry point")
 
         elif subcmd == "svg":
             from graphify.export import to_svg as _to_svg

@@ -223,6 +223,27 @@ For the file-graph tools (not Postgres), `graphify global add <graph.json> --as
 <repo>` maintains a merged multi-repo graph; `graphify plan --root <dir>` (or
 `--codegraph`) computes cross-service blast radius directly.
 
+### A navigable wiki (flat or hierarchical)
+
+Turn the graph into an agent-crawlable Markdown wiki:
+
+```bash
+graphify export wiki                 # flat: index.md + one article per community + god nodes
+graphify export wiki --hierarchical  # module tree: overview.md + nested module articles
+```
+
+`--hierarchical` recursively decomposes the graph into a **module tree**
+(`overview.md` → modules → sub-modules), writing one article per module plus a
+`module_tree.json` (programmatic navigation) and `metadata.json` (commit +
+params, the foundation for incremental regen). Tune it:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--max-depth N` | `2` | recursion levels |
+| `--max-nodes-per-module N` | `40` | split a module while it holds more nodes |
+| `--min-module-size N` | `5` | sub-groups smaller than this fold into the parent |
+| `--summarize BACKEND` | off | LLM authors a one-line blurb per module |
+
 ---
 
 ## 8. Confidence tiers — what to trust
