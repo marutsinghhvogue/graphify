@@ -282,7 +282,8 @@ You can also set `GRAPHIFY_GOOGLE_WORKSPACE=1`. Graphify exports shortcuts into
 /graphify . --cluster-only --resolution 1.5      # more granular communities
 /graphify . --cluster-only --exclude-hubs 99     # suppress utility super-hubs from god-node rankings
 /graphify . --no-viz               # skip the HTML, just the report + JSON
-/graphify . --wiki                 # build a markdown wiki from the graph
+/graphify . --wiki                 # build a markdown wiki from the graph (flat: index + per-community articles)
+graphify export wiki --hierarchical  # module-tree wiki: overview.md + nested module articles + module_tree.json
 graphify export callflow-html      # Mermaid architecture/call-flow HTML (auto-regenerates on every git commit if hook is installed)
 
 /graphify query "what connects auth to the database?"
@@ -523,7 +524,9 @@ graphify install  # overwrites the skill file
 /graphify ./raw --cluster-only     # rerun clustering on existing graph
 /graphify ./raw --no-viz           # skip HTML visualization
 /graphify ./raw --obsidian         # generate Obsidian vault
-/graphify ./raw --wiki             # build agent-crawlable markdown wiki
+/graphify ./raw --wiki             # build agent-crawlable markdown wiki (flat: index + per-community articles)
+graphify export wiki --hierarchical   # module-tree wiki: overview.md + nested module articles + module_tree.json
+                                      # [--max-depth N] [--max-nodes-per-module N] [--min-module-size N] [--summarize BACKEND]
 /graphify ./raw --svg              # export graph.svg
 /graphify ./raw --graphml          # export for Gephi / yEd
 /graphify ./raw --neo4j            # generate cypher.txt for Neo4j
