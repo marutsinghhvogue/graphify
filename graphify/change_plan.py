@@ -61,6 +61,37 @@ class ImpactRow:
     cross_boundary: bool
 
 
+@dataclass(frozen=True)
+class ContractChange:
+    """An API contract (endpoint) inside the change surface, plus who consumes it.
+
+    ``consumers`` are the *other* services whose code calls this endpoint over the
+    wire (``calls_service`` edges). A non-empty consumer set means changing this
+    contract risks breaking them — the cross-service blast the graph makes explicit."""
+
+    endpoint: str            # "POST /invoices" (from the route node)
+    service: str | None      # the owning (producer) service
+    handler: str             # the handler function label
+    location: str
+    consumers: list[str] = field(default_factory=list)   # consuming services (break risk)
+
+    @property
+    def breaking_risk(self) -> bool:
+        return bool(self.consumers)
+
+
+@dataclass(frozen=True)
+class ExternalCall:
+    """A third-party / outbound HTTP call in the impacted code (Stripe, GitHub, …)."""
+
+    caller: str
+    service: str | None
+    host: str                # api.stripe.com
+    method: str
+    url: str
+    location: str
+
+
 @dataclass
 class ChangePlan:
     prd: str
@@ -72,6 +103,73 @@ class ChangePlan:
     affected: list[ImpactRow] = field(default_factory=list)         # Stage 3 (deduped, closest depth)
     impacted_services: dict[str, int] = field(default_factory=dict)  # downstream service → affected count
     cross_boundary: int = 0
+    contracts_changed: list[ContractChange] = field(default_factory=list)  # endpoints in the change surface
+    external_calls: list[ExternalCall] = field(default_factory=list)       # third-party calls impacted
+    detailed_plan: str = ""                                          # optional LLM narrative (--detailed)
+
+
+def _derive_contracts(G: nx.Graph, surface_ids: set[str]) -> list[ContractChange]:
+    """Endpoints inside the change surface + the services that consume them.
+
+    An endpoint is in the surface when its ``route`` node OR its handler (the source
+    of a ``handles`` edge) is a seed or in the blast radius. Consumers come from the
+    reverse ``calls_service`` edges into that handler. Purely graph-derived —
+    deterministic, no source access — so it works on any cross-service graph."""
+    directed = G.is_directed()
+
+    def _in_edges(n):   # (u, n) regardless of graph directedness
+        return G.in_edges(n, data=True) if directed else G.edges(n, data=True)
+
+    def _out_edges(n):
+        return G.out_edges(n, data=True) if directed else G.edges(n, data=True)
+
+    # Map each handler → the route it handles (handler --handles--> route).
+    handler_route: dict[str, str] = {}
+    for u, v, d in G.edges(data=True):
+        if d.get("relation") == "handles":
+            handler_route[u] = v
+
+    def _consumers(handler_id: str) -> list[str]:
+        svcs: set[str] = set()
+        for a, b, d in _in_edges(handler_id):
+            if d.get("relation") != "calls_service":
+                continue
+            other = a if b == handler_id else b
+            svc = ((G.nodes.get(other) or {}).get("metadata") or {}).get("service")
+            svcs.add(str(svc) if svc else "unknown")
+        return sorted(svcs)
+
+    out: dict[str, ContractChange] = {}
+    for nid in surface_ids:
+        if nid not in G:
+            continue
+        d = G.nodes[nid]
+        kind = str(d.get("kind") or "").lower()
+        # Resolve (route_id, handler_id) from either a route node or a handler node.
+        if kind == "route":
+            route_id, handler_id = nid, None
+            for a, b, ed in _in_edges(nid):
+                if ed.get("relation") == "handles":
+                    handler_id = a if b == nid else b
+                    break
+        elif nid in handler_route:
+            handler_id, route_id = nid, handler_route[nid]
+        else:
+            continue
+        rd = G.nodes.get(route_id) or {}
+        endpoint = str(rd.get("label") or route_id)
+        svc = ((rd.get("metadata") or {}).get("service")
+               or (d.get("metadata") or {}).get("service"))
+        handler_label = str((G.nodes.get(handler_id) or {}).get("label") or handler_id or "?")
+        loc = f"{rd.get('source_file') or d.get('source_file') or ''}:{rd.get('source_location') or ''}".strip(":")
+        consumers = _consumers(handler_id) if handler_id else []
+        cc = ContractChange(endpoint=endpoint, service=str(svc) if svc else None,
+                             handler=handler_label, location=loc, consumers=consumers)
+        # Dedup by endpoint; keep the row that carries consumers.
+        prev = out.get(endpoint)
+        if prev is None or (cc.consumers and not prev.consumers):
+            out[endpoint] = cc
+    return sorted(out.values(), key=lambda c: (not c.breaking_risk, c.endpoint))
 
 
 def graph_from_extraction(extraction: dict) -> nx.DiGraph:
@@ -195,6 +293,31 @@ def plan_change(
     impacted_services = Counter(r.service for r in affected if r.service)
     cross_boundary = sum(1 for r in affected if r.cross_boundary)
 
+    # Contracts in the change surface (seeds + blast radius) + their consumers.
+    surface_ids = {s.symbol_id for s in seeds} | {r.node_id for r in affected}
+    contracts_changed = _derive_contracts(G, surface_ids)
+
+    # Third-party / outbound calls in the impacted services (best-effort: needs the
+    # source tree via ``root``; the graph doesn't carry external calls today).
+    external: list[ExternalCall] = []
+    if root is not None:
+        touched = set(selected) | set(impacted_services) | {
+            (n.get("metadata") or {}).get("service")
+            for n in nodes if service_of(n, root=root)
+        }
+        touched.discard(None)
+        try:
+            from graphify.contract_introspect import external_calls as _ext
+            from graphify.contract_introspect import host_of as _host
+            for c in _ext(root, services=touched or None):
+                external.append(ExternalCall(
+                    caller=f"{c.caller}()", service=c.service or None,
+                    host=_host(c.raw_url), method=c.method,
+                    url=c.raw_url, location=f"{c.source_file}:L{c.line}",
+                ))
+        except Exception:
+            external = []          # never let a source-scan hiccup break the plan
+
     return ChangePlan(
         prd=prd,
         services=services,
@@ -205,6 +328,8 @@ def plan_change(
         affected=affected,
         impacted_services=dict(impacted_services.most_common()),
         cross_boundary=cross_boundary,
+        contracts_changed=contracts_changed,
+        external_calls=external,
     )
 
 
@@ -265,4 +390,85 @@ def format_change_plan(
     if not plan.affected:
         lines.append("  (no downstream nodes — the seeds are leaves, or depth too shallow)")
 
+    # Contracts changed
+    lines += ["", f"Contracts changed — {len(plan.contracts_changed)} endpoint(s) in the change surface:"]
+    if plan.contracts_changed:
+        for c in plan.contracts_changed:
+            svc = f" {{{sz(c.service)}}}" if c.service else ""
+            risk = (f"  ! BREAKING risk — consumed by: {', '.join(sz(s) for s in c.consumers)}"
+                    if c.breaking_risk else "  (no cross-service consumers detected)")
+            loc = f"  {sz(c.location)}" if c.location else ""
+            lines.append(f"  {sz(c.endpoint)}{svc}  ->  {sz(c.handler)}{loc}")
+            lines.append(f"    {risk}")
+    else:
+        lines.append("  (no API endpoints in the change surface — internal-only change)")
+
+    # Third-party calls
+    lines += ["", f"Third-party calls in the impacted code — {len(plan.external_calls)} call(s):"]
+    if plan.external_calls:
+        for x in plan.external_calls:
+            svc = f" {{{sz(x.service)}}}" if x.service else ""
+            lines.append(f"  {sz(x.host)}  [{sz(x.method)}] {sz(x.url)}{svc}"
+                         f"  <- {sz(x.caller)}  {sz(x.location)}")
+    else:
+        lines.append("  (none detected — or run with --root so the source can be scanned)")
+
+    if plan.detailed_plan:
+        lines += ["", "Detailed plan:", "", plan.detailed_plan]
+
     return "\n".join(lines)
+
+
+def _detailed_prompt(plan: ChangePlan) -> str:
+    """Assemble the grounded facts of a ``ChangePlan`` into a synthesis prompt. The
+    LLM narrates over verified structure — it does not invent the impact set."""
+    svc = ", ".join(f"{m.service} ({m.evidence[0]})" if m.evidence else m.service
+                    for m in plan.services) or "none identified"
+    contracts = "\n".join(
+        f"  - {c.endpoint} [{c.service or '?'}] handler {c.handler}"
+        + (f" — BREAKING risk, consumed by {', '.join(c.consumers)}" if c.breaking_risk else "")
+        for c in plan.contracts_changed) or "  - none"
+    ext = "\n".join(f"  - {x.host} [{x.method}] via {x.caller} ({x.service or '?'})"
+                    for x in plan.external_calls) or "  - none"
+    downstream = ", ".join(f"{s} ({n})" for s, n in plan.impacted_services.items()) or "none"
+    seeds = ", ".join(f"{s.name} [{s.path}]" for s in plan.seeds[:10]) or "none"
+    return (
+        "You are a staff engineer writing an implementation plan for a change request. "
+        "Use ONLY the grounded facts below (derived from a code graph); do not invent files, "
+        "services, or endpoints. Produce a concise, ordered plan.\n\n"
+        f"CHANGE REQUEST:\n{plan.prd}\n\n"
+        f"RESPONSIBLE SERVICES (and why they matched):\n  {svc}\n\n"
+        f"CHANGE-POINT SYMBOLS (seeds):\n  {seeds}\n\n"
+        f"API CONTRACTS IN THE CHANGE SURFACE:\n{contracts}\n\n"
+        f"THIRD-PARTY CALLS IN IMPACTED CODE:\n{ext}\n\n"
+        f"DOWNSTREAM-IMPACTED SERVICES (blast radius):\n  {downstream}\n\n"
+        "Write the plan as:\n"
+        "1. Per responsible service: what to change and WHY (tie to the request).\n"
+        "2. Contract changes: for each endpoint, the change + migration/versioning if it has consumers.\n"
+        "3. Third-party integration work, if any.\n"
+        "4. Suggested order of execution and the top risks."
+    )
+
+
+def synthesize_detailed_plan(
+    plan: ChangePlan,
+    *,
+    backend: str = "claude",
+    model: str | None = None,
+    max_tokens: int = 900,
+    caller: Callable[[str], str] | None = None,
+) -> str:
+    """Turn a grounded ``ChangePlan`` into a natural-language detailed plan via an
+    LLM. ``caller`` is injectable (defaults to ``llm._call_llm``) so this is
+    unit-testable without an API key. Any failure returns ``""`` — the structured
+    plan already stands on its own, so the narrative is pure enrichment."""
+    def _call(prompt: str) -> str:
+        if caller is not None:
+            return caller(prompt)
+        from graphify.llm import _call_llm
+        return _call_llm(prompt, backend=backend, model=model, max_tokens=max_tokens)
+
+    try:
+        return (_call(_detailed_prompt(plan)) or "").strip()
+    except Exception:
+        return ""

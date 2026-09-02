@@ -98,6 +98,37 @@ Affected nodes for rollup_daily()
 
 Related in-memory commands: `graphify callers "<fn>"` / `graphify callees "<fn>"`.
 
+### The whole chain in one call — `graphify plan`
+
+`graphify plan "<requirement>" --root <dir>` runs Stages 1→3 and returns a change
+plan: responsible services (with the *why*), seed symbols, the cross-service blast
+radius, **the API contracts in the change surface + who consumes them (break
+risk)**, and **third-party calls in the impacted code**.
+
+```bash
+graphify plan "let a customer update their profile and pay an invoice" --root ./services
+```
+
+```
+Responsible services (Stage 1):
+  2.83 [lexical] user_service   <- create_user()
+  1.65 [lexical] order_service  <- doc: customer profile … charge/invoice from billing
+Contracts changed — 3 endpoint(s) in the change surface:
+  GET /users/{} {user_service}  ->  get_user()   user_service/main.py:L7
+      ! BREAKING risk — consumed by: order_service
+Third-party calls in the impacted code — 1 call(s):
+  api.stripe.com  [GET] https://api.stripe.com/v1/charges {order_service}  <- getOrder()
+```
+
+- **Contracts changed** is graph-derived (routes/handlers in the surface + their
+  `calls_service` consumers) — deterministic, no source needed.
+- **Third-party calls** are scanned from the impacted services' source (needs
+  `--root`); a call whose URL names an absolute host that no internal endpoint
+  claims is flagged as an outbound dependency.
+- `--detailed [BACKEND]` adds an LLM-written narrative (per-service what/why,
+  contract migrations, ordered steps, risks) **over these grounded facts** — the
+  model narrates verified structure, it doesn't invent the impact set.
+
 ---
 
 ## 4. Coverage & adding your own framework

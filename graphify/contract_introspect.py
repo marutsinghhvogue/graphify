@@ -365,6 +365,48 @@ def cross_service_graph(root: str | Path) -> dict[str, Any]:
     return {"nodes": list(nodes.values()), "edges": edges, "stats": stats}
 
 
+def host_of(raw_url: str) -> str:
+    """Host of an absolute URL (``https://api.stripe.com/v1/charges`` → ``api.stripe.com``);
+    ``""`` for a relative path. The third-party signal: a call to an absolute host
+    that no internal endpoint claims is an outbound dependency."""
+    m = _SCHEME_HOST.match((raw_url or "").strip().strip('`"\''))
+    if not m:
+        return ""
+    return m.group(0).split("://", 1)[1]
+
+
+def external_calls(root: str | Path, services: set[str] | None = None) -> list[Call]:
+    """Third-party (outbound) HTTP calls across the estate: consumer calls whose
+    ``(method, path)`` matches **no** internal endpoint and whose URL names an
+    absolute host — i.e. Stripe/GitHub/etc., not another indexed service. Reuses
+    the same scan + catalog as :func:`cross_service_graph`. ``services`` optionally
+    restricts to calls originating in those services (e.g. a plan's blast radius)."""
+    root = Path(root)
+    all_eps: list[Endpoint] = []
+    all_calls: list[Call] = []
+    for svc_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        eps, calls = scan_service(svc_dir, svc_dir.name)
+        all_eps += eps
+        all_calls += calls
+    catalog: dict[tuple[str, str], list[Endpoint]] = {}
+    for e in all_eps:
+        catalog.setdefault((e.method, e.path), []).append(e)
+
+    out: list[Call] = []
+    for c in all_calls:
+        if services is not None and c.service not in services:
+            continue
+        cands = [e for e in catalog.get((c.method, c.path), []) if e.service != c.service]
+        if c.target_service:
+            cands = [e for e in cands if e.service == c.target_service]
+        if cands:
+            continue                      # matched an internal endpoint → not third-party
+        if not host_of(c.raw_url):
+            continue                      # relative/unknown target → can't call it third-party
+        out.append(c)
+    return out
+
+
 # ── reconciliation with the tree-sitter AST graph ─────────────────────────────
 #
 # cross_service_graph emits handler/consumer function nodes under a self-contained

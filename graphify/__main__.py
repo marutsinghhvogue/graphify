@@ -3369,11 +3369,15 @@ def main() -> None:
                        help="build the graph from CodeGraph indexes (.codegraph/codegraph.db under "
                             "--root) instead of graphify's own extractor, then stitch our "
                             "cross-service edges on top (requires --root)")
+        p.add_argument("--detailed", nargs="?", const="claude", default=None, metavar="BACKEND",
+                       help="synthesize a natural-language detailed plan over the grounded facts "
+                            "with an LLM (optional backend: claude|openai|gemini|…; default claude)")
         ns = p.parse_args(sys.argv[2:])
         from graphify.change_plan import (
             format_change_plan,
             graph_from_extraction,
             plan_change,
+            synthesize_detailed_plan,
         )
         from graphify.semantic_index import get_embedder
         from graphify.service_profiles import LLMSummarizer, load_service_docs
@@ -3426,6 +3430,8 @@ def main() -> None:
             top_services=ns.top_services, top_seeds=ns.top_seeds,
             depth=ns.depth, embedder=embedder, summarizer=summarizer,
         )
+        if ns.detailed:
+            plan.detailed_plan = synthesize_detailed_plan(plan, backend=ns.detailed)
         print(format_change_plan(plan))
     elif cmd == "benchmark-plan":
         # graphify benchmark-plan "<prd>[;<prd2>…]" --root DIR [--top-services N] [--depth N]

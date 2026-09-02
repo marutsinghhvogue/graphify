@@ -106,3 +106,105 @@ def test_format_change_plan_applies_sanitize():
     plan.scoped_to_all = True
     out = format_change_plan(plan, sanitize=str.upper)
     assert 'Change plan for "X"' in out
+
+
+# --- contracts changed + third-party calls + detailed synthesis ---------------
+
+from graphify.change_plan import (  # noqa: E402
+    ContractChange,
+    ExternalCall,
+    _derive_contracts,
+    synthesize_detailed_plan,
+)
+from graphify.contract_introspect import external_calls, host_of  # noqa: E402
+
+
+def test_host_of():
+    assert host_of("https://api.stripe.com/v1/charges") == "api.stripe.com"
+    assert host_of("`https://api.stripe.com/v1/charges`") == "api.stripe.com"
+    assert host_of("/users/5") == ""            # relative → not third-party
+    assert host_of("") == ""
+
+
+def test_external_calls_finds_stripe_only():
+    calls = external_calls(FIXTURE)
+    hosts = {host_of(c.raw_url) for c in calls}
+    # stripe is third-party (no internal endpoint); user-service/billing match internal
+    assert "api.stripe.com" in hosts
+    assert "user-service" not in hosts
+
+
+def test_external_calls_service_filter():
+    assert external_calls(FIXTURE, services={"user_service"}) == []   # user_service makes no outbound call
+    assert external_calls(FIXTURE, services={"order_service"})        # order_service calls stripe
+
+
+def test_derive_contracts_finds_consumed_endpoint(G):
+    # user_service's get_user handler is consumed cross-service by order_service.
+    handler = "svc_user_service_fn_get_user"
+    contracts = _derive_contracts(G, {handler})
+    assert contracts
+    cc = contracts[0]
+    assert cc.breaking_risk
+    assert "order_service" in cc.consumers
+
+
+def test_plan_surfaces_contracts_and_external(G, docs):
+    plan = plan_change(G, "let a customer update their user profile",
+                       root=FIXTURE, service_docs=docs, top_services=2, top_seeds=4, depth=3)
+    # a consumed contract shows up with break risk
+    assert any(c.breaking_risk for c in plan.contracts_changed)
+    # order_service is downstream-impacted, so its stripe call is surfaced
+    assert any(x.host == "api.stripe.com" for x in plan.external_calls)
+
+
+def test_format_shows_new_sections(G, docs):
+    plan = plan_change(G, "let a customer update their user profile",
+                       root=FIXTURE, service_docs=docs, top_services=2, depth=3)
+    out = format_change_plan(plan)
+    assert "Contracts changed" in out
+    assert "Third-party calls in the impacted code" in out
+
+
+def test_external_calls_absent_without_root(G, docs):
+    # no root → no source scan → no external calls (but plan still works)
+    plan = plan_change(G, "update user profile", top_services=2, depth=3)
+    assert plan.external_calls == []
+
+
+def test_synthesize_detailed_plan_uses_facts():
+    seen = {}
+    plan = ChangePlan(
+        prd="add tax to invoices",
+        contracts_changed=[ContractChange(
+            endpoint="POST /invoices", service="billing", handler="createInvoice()",
+            location="Inv.java:L10", consumers=["order_service"])],
+        external_calls=[ExternalCall(caller="charge()", service="order_service",
+                                     host="api.stripe.com", method="POST",
+                                     url="https://api.stripe.com/v1/charges", location="o.ts:L12")],
+    )
+
+    def fake(prompt: str) -> str:
+        seen["prompt"] = prompt
+        return "1. billing: add tax field."
+
+    out = synthesize_detailed_plan(plan, caller=fake)
+    assert out == "1. billing: add tax field."
+    # the grounded facts made it into the prompt
+    assert "POST /invoices" in seen["prompt"]
+    assert "api.stripe.com" in seen["prompt"]
+    assert "add tax to invoices" in seen["prompt"]
+
+
+def test_synthesize_degrades_on_failure():
+    def boom(_p: str) -> str:
+        raise RuntimeError("no api key")
+
+    assert synthesize_detailed_plan(ChangePlan(prd="x"), caller=boom) == ""
+
+
+def test_detailed_plan_rendered_in_format():
+    plan = ChangePlan(prd="x", detailed_plan="1. do the thing.")
+    out = format_change_plan(plan)
+    assert "Detailed plan:" in out
+    assert "1. do the thing." in out
