@@ -1374,9 +1374,20 @@ def serve_http(
         file=sys.stderr,
     )
     if host in ("0.0.0.0", "::", "") and not api_key:
+        # Fail CLOSED: binding a wildcard host with no key would serve the whole graph
+        # unauthenticated on the network. Refuse unless the operator explicitly opts in
+        # (GRAPHIFY_ALLOW_INSECURE=1) — a missing/typo'd GRAPHIFY_API_KEY must not silently
+        # reopen the server. Loopback binds (127.0.0.1/::1) are unaffected.
+        import os
+        if (os.environ.get("GRAPHIFY_ALLOW_INSECURE") or "").strip().lower() not in ("1", "true", "yes"):
+            raise SystemExit(
+                f"refusing to bind {host or '0.0.0.0'} with no api-key: that exposes the graph "
+                "unauthenticated on the network. Set --api-key (or GRAPHIFY_API_KEY), bind 127.0.0.1, "
+                "or set GRAPHIFY_ALLOW_INSECURE=1 to override."
+            )
         print(
-            f"WARNING: binding {host or '0.0.0.0'} with no api-key exposes the graph "
-            "unauthenticated on the network. Set --api-key (or GRAPHIFY_API_KEY).",
+            f"WARNING: binding {host or '0.0.0.0'} with no api-key and GRAPHIFY_ALLOW_INSECURE set — "
+            "the graph is exposed unauthenticated on the network.",
             file=sys.stderr,
         )
     uvicorn.run(app, host=host, port=port)
