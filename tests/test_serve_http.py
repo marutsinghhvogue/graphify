@@ -171,6 +171,137 @@ def test_tools_list_over_http(tmp_path):
                 "discover_seeds", "blast_radius_pg", "discover_seeds_pg"} <= names
 
 
+def _project_with_graph(tmp_path, node_count: int, name: str = "proj") -> str:
+    """Create ``<proj>/graphify-out/graph.json`` and return the project dir."""
+    proj = tmp_path / name
+    (proj / "graphify-out").mkdir(parents=True)
+    graph = {
+        "directed": True,
+        "nodes": [{"id": f"n{i}", "label": f"N{i}", "community": 0} for i in range(node_count)],
+        "edges": [],
+    }
+    (proj / "graphify-out" / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    return str(proj)
+
+
+def _init_session(client) -> dict:
+    init = client.post("/mcp", headers=_MCP_HEADERS, json=_INIT_BODY)
+    assert init.status_code == 200
+    headers = {**_MCP_HEADERS, "mcp-session-id": init.headers.get("mcp-session-id")}
+    client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return headers
+
+
+def _call_tool(client, headers, name, arguments, rid) -> str:
+    resp = client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": rid, "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    })
+    assert resp.status_code == 200
+    return resp.json()["result"]["content"][0]["text"]
+
+
+def test_project_path_is_optional_on_every_tool(tmp_path):
+    """Multi-project support is additive: every tool gains an optional
+    project_path, and none of them makes it required."""
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        resp = client.post("/mcp", headers=headers,
+                            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        for tool in resp.json()["result"]["tools"]:
+            props = tool["inputSchema"].get("properties", {})
+            assert "project_path" in props, f"{tool['name']} missing project_path"
+            assert "project_path" not in tool["inputSchema"].get("required", [])
+
+
+def test_project_path_routes_to_that_projects_graph(tmp_path):
+    """One running server answers against the default graph when project_path is
+    omitted, and against a project's own graph when it is supplied."""
+    proj = _project_with_graph(tmp_path, node_count=3)  # default graph has 2 nodes
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=2)
+        assert "Nodes: 3" in _call_tool(client, headers, "graph_stats", {"project_path": proj}, rid=3)
+        # Falling back to the default afterwards still works (no state leak).
+        assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=4)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, 8), ("", 8), ("bad", 8), ("0", 1), ("-4", 1), ("3", 3)],
+)
+def test_max_server_contexts_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("GRAPHIFY_MAX_CONTEXTS", raising=False)
+    else:
+        monkeypatch.setenv("GRAPHIFY_MAX_CONTEXTS", value)
+    assert serve_mod._max_server_contexts() == expected
+
+
+def test_project_context_cache_is_lru_and_pins_default_graph(tmp_path, monkeypatch):
+    """Project contexts hit, promote, and evict without evicting the default."""
+    monkeypatch.setenv("GRAPHIFY_MAX_CONTEXTS", "2")
+    original_load = serve_mod._load_graph
+    loads: dict[str, int] = {}
+
+    def counting_load(path: str):
+        resolved = str(Path(path).resolve())
+        loads[resolved] = loads.get(resolved, 0) + 1
+        return original_load(path)
+
+    monkeypatch.setattr(serve_mod, "_load_graph", counting_load)
+    projects = [
+        _project_with_graph(tmp_path, node_count=i + 3, name=f"project-{i}")
+        for i in range(3)
+    ]
+    default_graph = _graph_file(tmp_path)
+    app = serve_mod._build_http_app(default_graph, json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        assert "Nodes: 3" in _call_tool(client, headers, "graph_stats", {"project_path": projects[0]}, rid=2)
+        assert "Nodes: 4" in _call_tool(client, headers, "graph_stats", {"project_path": projects[1]}, rid=3)
+        # A cache hit promotes project-0 above project-1 in LRU recency.
+        assert "Nodes: 3" in _call_tool(client, headers, "graph_stats", {"project_path": projects[0]}, rid=4)
+        assert "Nodes: 5" in _call_tool(client, headers, "graph_stats", {"project_path": projects[2]}, rid=5)
+        # project-1, not the re-touched project-0, was evicted.
+        assert "Nodes: 4" in _call_tool(client, headers, "graph_stats", {"project_path": projects[1]}, rid=6)
+        # The configured default graph stays warm even when project capacity is full.
+        assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=7)
+
+    first_graph = str((Path(projects[0]) / "graphify-out" / "graph.json").resolve())
+    second_graph = str((Path(projects[1]) / "graphify-out" / "graph.json").resolve())
+    default_graph = str(Path(default_graph).resolve())
+    assert loads[first_graph] == 1
+    assert loads[second_graph] == 2
+    assert loads[default_graph] == 1
+
+
+def test_bad_project_path_errors_without_killing_server(tmp_path):
+    """A missing project graph is a tool error, not a process exit — the server
+    keeps serving the default graph."""
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        bad = _call_tool(client, headers, "graph_stats",
+                         {"project_path": str(tmp_path / "does-not-exist")}, rid=2)
+        assert "not found" in bad.lower()
+        assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=3)
+
+
+def test_corrupt_project_graph_is_a_tool_error_without_killing_server(tmp_path):
+    """A CLI-style SystemExit from a client graph cannot stop the MCP server."""
+    project = Path(_project_with_graph(tmp_path, node_count=3))
+    (project / "graphify-out" / "graph.json").write_text("{not json", encoding="utf-8")
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        bad = _call_tool(client, headers, "graph_stats", {"project_path": str(project)}, rid=2)
+        assert "could not load graph.json" in bad
+        assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=3)
+
+
 def test_stateless_mode_initialize(tmp_path):
     app = serve_mod._build_http_app(_graph_file(tmp_path), stateless=True, json_response=True)
     with _client(app) as client:
@@ -231,3 +362,71 @@ def test_cli_api_key_from_env(monkeypatch):
     monkeypatch.setattr(serve_mod, "serve_http", lambda gp, **k: captured.update(**k))
     serve_mod._main(["g.json", "--transport", "http"])
     assert captured["api_key"] == "from-env"
+
+
+def test_pr_tool_failure_sets_iserror(tmp_path, monkeypatch):
+    """ADR-0001 finding 4: a PR tool that fails because gh is missing / not
+    authenticated must return isError:true, not a successful text result."""
+    import graphify.prs as prs_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("gh CLI not found or not authenticated. Run: gh auth login")
+
+    monkeypatch.setattr(prs_mod, "fetch_prs", _boom)
+
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        resp = client.post("/mcp", headers=headers, json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "list_prs", "arguments": {}},
+        })
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert result.get("isError") is True, result
+        assert "gh" in result["content"][0]["text"].lower()
+
+
+def test_normal_tool_result_is_not_iserror(tmp_path):
+    """A successful tool result must not be marked isError."""
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        resp = client.post("/mcp", headers=headers, json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "graph_stats", "arguments": {}},
+        })
+        assert resp.status_code == 200
+        assert not resp.json()["result"].get("isError")
+def _ambiguous_graph_file(tmp_path: Path) -> str:
+    """A graph where the label 'extract' matches two nodes in different files."""
+    graph = {
+        "directed": True,
+        "nodes": [
+            {"id": "a", "label": "extract", "community": 0, "source_file": "a/x.py"},
+            {"id": "b", "label": "extract", "community": 0, "source_file": "b/y.py"},
+            {"id": "u", "label": "unique_helper", "community": 0, "source_file": "c/z.py"},
+        ],
+        "edges": [
+            {"source": "a", "target": "u", "relation": "calls", "confidence": "EXTRACTED"},
+        ],
+    }
+    p = tmp_path / "graph.json"
+    p.write_text(json.dumps(graph), encoding="utf-8")
+    return str(p)
+
+
+def test_get_node_and_get_neighbors_agree_on_ambiguous_label(tmp_path):
+    """ADR-0001 finding 1: get_node must not silently return a G.nodes()
+    iteration-order match for a hub name while get_neighbors reports the same
+    lookup as ambiguous. Both now route through the shared resolver."""
+    app = serve_mod._build_http_app(_ambiguous_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        node = _call_tool(client, headers, "get_node", {"label": "extract"}, rid=2)
+        neighbors = _call_tool(client, headers, "get_neighbors", {"label": "extract"}, rid=3)
+        assert node.startswith("Ambiguous:"), node
+        assert neighbors.startswith("Ambiguous:"), neighbors
+        # A unique label still resolves cleanly on get_node.
+        unique = _call_tool(client, headers, "get_node", {"label": "unique_helper"}, rid=4)
+        assert "Node: unique_helper" in unique, unique

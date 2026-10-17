@@ -1,6 +1,7 @@
 """Tests for graphify/security.py - URL validation, safe fetch, path guards, label sanitisation."""
 from __future__ import annotations
 
+import json
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -9,19 +10,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from graphify.security import (
+    check_graph_file_size_cap,
+    sanitize_label,
+    sanitize_metadata,
+    safe_fetch,
+    safe_fetch_text,
+    validate_graph_path,
+    validate_url,
+    _MAX_FETCH_BYTES,
     _MAX_GRAPH_FILE_BYTES,
+    _MAX_TEXT_BYTES,
+    _max_graph_file_bytes,
     _METADATA_MAX_LIST_ITEMS,
     _METADATA_MAX_VALUE_LEN,
     _sanitize_metadata_string,
     _sanitize_metadata_value,
-    check_graph_file_size_cap,
-    safe_fetch,
-    safe_fetch_text,
-    sanitize_label,
-    sanitize_metadata,
-    validate_graph_path,
-    validate_url,
 )
+
 
 # ---------------------------------------------------------------------------
 # validate_url
@@ -115,7 +120,7 @@ def test_safe_fetch_raises_on_size_exceeded():
 # ---------------------------------------------------------------------------
 
 def test_safe_fetch_text_decodes_utf8():
-    content = "héllo wörld".encode()
+    content = "héllo wörld".encode("utf-8")
     mock_resp = _make_mock_response(content)
     with patch("graphify.security._build_opener") as mock_opener_fn:
         mock_opener = MagicMock()
@@ -214,6 +219,12 @@ def test_sanitize_label_safe_passthrough():
     assert sanitize_label("MyClass") == "MyClass"
     assert sanitize_label("extract_python") == "extract_python"
 
+def test_sanitize_label_none_returns_empty():
+    # #1775: a node with source_file=None / label=None (synthetic/aggregate
+    # nodes, or JSON `null`) must not raise — .get() returns None, not the
+    # default, when the key is present-but-null.
+    assert sanitize_label(None) == ""
+
 
 # ---------------------------------------------------------------------------
 # check_graph_file_size_cap (#F4 — graph-load memory bomb protection)
@@ -221,6 +232,57 @@ def test_sanitize_label_safe_passthrough():
 
 def test_graph_size_cap_default_is_512_mib():
     assert _MAX_GRAPH_FILE_BYTES == 512 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# _max_graph_file_bytes — GRAPHIFY_MAX_GRAPH_BYTES env-var parsing
+# ---------------------------------------------------------------------------
+
+def test_max_graph_bytes_default_when_unset(monkeypatch):
+    monkeypatch.delenv("GRAPHIFY_MAX_GRAPH_BYTES", raising=False)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+def test_max_graph_bytes_default_when_blank(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "   ")
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+def test_max_graph_bytes_plain_integer(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "671088640")
+    assert _max_graph_file_bytes() == 671088640
+
+
+def test_max_graph_bytes_mb_suffix_is_binary(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "640MB")
+    assert _max_graph_file_bytes() == 640 * 1024 * 1024
+
+
+def test_max_graph_bytes_gb_suffix_is_binary(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "2GB")
+    assert _max_graph_file_bytes() == 2 * 1024 * 1024 * 1024
+
+
+def test_max_graph_bytes_suffix_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "3gb")
+    assert _max_graph_file_bytes() == 3 * 1024 * 1024 * 1024
+
+
+def test_max_graph_bytes_tolerates_space_before_suffix(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "5 GB")
+    assert _max_graph_file_bytes() == 5 * 1024 * 1024 * 1024
+
+
+@pytest.mark.parametrize("bad", ["not-a-number", "1.5GB", "0x10", "640KB"])
+def test_max_graph_bytes_unparseable_falls_back(monkeypatch, bad):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", bad)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+@pytest.mark.parametrize("nonpositive", ["0", "-1", "-4GB"])
+def test_max_graph_bytes_nonpositive_falls_back(monkeypatch, nonpositive):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", nonpositive)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
 
 
 def test_graph_size_cap_under_limit_returns_none(tmp_path):

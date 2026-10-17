@@ -44,3 +44,6 @@ paper/
 # CodeAtlas local index (large binary state)
 .codeatlas/
 deploy/.railway-secret
+
+# macOS Finder metadata
+.DS_Store

@@ -1,10 +1,33 @@
 # generate GRAPH_REPORT.md - the human-readable audit trail
 from __future__ import annotations
-
 import re
 from datetime import date
-
+from pathlib import Path
 import networkx as nx
+
+
+def _portable_root_label(root: str) -> str:
+    """Portable label for the report header — the project directory basename.
+
+    GRAPH_REPORT.md is a tracked artifact in practice, so its header must not
+    bake the generator host's absolute path into the file: the same graph would
+    otherwise produce different bytes on different machines and leak the build
+    machine's directory layout into git history (#2628, same class as #2598).
+
+    Taking the basename strips any leading absolute path without touching the
+    filesystem, and makes `graphify update .`, `graphify update ./proj`, and
+    `graphify update /abs/path/proj` all label the header `proj`. Only the
+    degenerate `.`/``/`..` cases need a cwd resolve to recover the real name;
+    if even that fails, fall back to the raw value.
+    """
+    raw = str(root).replace("\\", "/")
+    name = Path(raw).name
+    if name in ("", ".", ".."):
+        try:
+            name = Path(raw).resolve().name
+        except (OSError, RuntimeError):
+            name = ""
+    return name or raw
 
 
 def _safe_community_name(label: str) -> str:
@@ -12,6 +35,62 @@ def _safe_community_name(label: str) -> str:
     cleaned = re.sub(r'[\\/*?:"<>|#^[\]]', "", label.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")).strip()
     cleaned = re.sub(r"\.(md|mdx|markdown)$", "", cleaned, flags=re.IGNORECASE)
     return cleaned or "unnamed"
+
+
+def load_learning_for_report(graph_path) -> dict | None:
+    """Assemble the report's work-memory inputs from sibling artifacts.
+
+    Reads the ``.graphify_learning.json`` overlay (preferred sources) next to
+    ``graph_path`` and re-aggregates the memory docs for the query-scoped
+    dead-ends. Best-effort: returns None if neither is available, so the report
+    simply omits the section. Never raises.
+    """
+    from pathlib import Path as _Path
+    try:
+        gp = _Path(graph_path)
+        from graphify.reflect import load_learning_overlay, load_memory_docs, aggregate_lessons
+        overlay = load_learning_overlay(gp)
+        dead_ends: list[dict] = []
+        mem = gp.parent / "memory"
+        if mem.is_dir():
+            agg = aggregate_lessons(load_memory_docs(mem))
+            dead_ends = agg.get("dead_ends", [])
+        if not overlay and not dead_ends:
+            return None
+        return {"overlay": overlay, "dead_ends": dead_ends}
+    except Exception:
+        return None
+
+
+def _learning_section(lines: list, learning: dict | None, top_n: int = 10) -> None:
+    """Append the ``## Work-memory lessons`` section, or nothing when empty."""
+    if not learning:
+        return
+    overlay = learning.get("overlay") or {}
+    dead_ends = learning.get("dead_ends") or []
+    preferred = [
+        (nid, e) for nid, e in overlay.items()
+        if isinstance(e, dict) and e.get("status") == "preferred"
+    ]
+    # Most-corroborated first (uses desc), then by score, then id for stability.
+    preferred.sort(key=lambda kv: (-kv[1].get("uses", 0),
+                                   -float(kv[1].get("score", 0) or 0), kv[0]))
+    if not preferred and not dead_ends:
+        return
+    lines += ["", "## Work-memory lessons"]
+    if preferred:
+        lines += ["", "**Preferred sources** — corroborated by past sessions; start here."]
+        for nid, e in preferred[:top_n]:
+            label = e.get("label") or nid
+            stale = " _(code changed — re-verify)_" if e.get("stale") else ""
+            lines.append(f"- `{label}` ({e.get('uses', 0)}× useful, "
+                         f"score={e.get('score', 0)}){stale}")
+    if dead_ends:
+        lines += ["", "**Known dead ends** — questions that led nowhere; don't re-derive."]
+        for d in dead_ends:
+            nodes = ", ".join(f"`{n}`" for n in d.get("nodes", []))
+            lines.append(f"- \"{d.get('question', '')}\""
+                         + (f" -> {nodes}" if nodes else ""))
 
 
 def generate(
@@ -27,6 +106,8 @@ def generate(
     suggested_questions: list[dict] | None = None,
     min_community_size: int = 3,
     built_at_commit: str | None = None,
+    learning: dict | None = None,
+    obsidian: bool = False,
 ) -> str:
     today = date.today().isoformat()
 
@@ -45,7 +126,7 @@ def generate(
     inf_avg = round(sum(inf_scores) / len(inf_scores), 2) if inf_scores else None
 
     lines = [
-        f"# Graph Report - {root}  ({today})",
+        f"# Graph Report - {_portable_root_label(root)}  ({today})",
         "",
         "## Corpus Check",
     ]
@@ -58,13 +139,25 @@ def generate(
         ]
 
     from .analyze import _is_file_node as _ifn
+
+    def _real_count(nodes) -> int:
+        return sum(1 for n in nodes if not _ifn(G, n))
+
     non_empty = {cid: nodes for cid, nodes in communities.items()
                  if any(not _ifn(G, n) for n in nodes)}
+    # One predicate for every figure the report prints about itself (#3148):
+    # "thin" is 0 < real < min_community_size, and "shown" is what the render
+    # loop below actually renders (real >= min_community_size) - previously
+    # shown was total-thin, which also counted communities with ZERO real
+    # nodes that the loop skips, overstating the count (#2129's residual).
     thin_count_summary = sum(
         1 for nodes in communities.values()
-        if 0 < sum(1 for n in nodes if not _ifn(G, n)) < min_community_size
+        if 0 < _real_count(nodes) < min_community_size
     )
-    shown_count = len(communities) - thin_count_summary
+    shown_count = sum(
+        1 for nodes in communities.values()
+        if _real_count(nodes) >= min_community_size
+    )
 
     lines += [
         "",
@@ -85,14 +178,21 @@ def generate(
             "- Run `graphify update .` after code changes (no API cost).",
         ]
 
-    # Community hub navigation - links to _COMMUNITY_*.md files in the Obsidian vault.
-    # Without these, GRAPH_REPORT.md is a dead-end and the vault splits into disconnected components.
+    # Community hub navigation. The `_COMMUNITY_*.md` notes these wikilinks target
+    # are only created by the opt-in `--obsidian` export, and the report is written
+    # at build time (before any export runs), so emitting wikilinks by default left
+    # every link dangling — polluting an Obsidian vault's graph view and rendering as
+    # literal brackets everywhere else (#1712). Emit wikilinks only when the caller
+    # signals Obsidian output; otherwise a plain list, which navigates nowhere-to-break.
     if non_empty:
         lines += ["", "## Community Hubs (Navigation)"]
         for cid in non_empty:
             label = community_labels.get(cid, f"Community {cid}")
-            safe = _safe_community_name(label)
-            lines.append(f"- [[_COMMUNITY_{safe}|{label}]]")
+            if obsidian:
+                safe = _safe_community_name(label)
+                lines.append(f"- [[_COMMUNITY_{safe}|{label}]]")
+            else:
+                lines.append(f"- {label}")
 
     lines += [
         "",
@@ -121,20 +221,30 @@ def generate(
     else:
         lines.append("- None detected - all connections are within the same source files.")
 
-    # Circular imports surfaced from file-level dependency graph.
-    from .analyze import find_import_cycles
-    cycles = find_import_cycles(G)
-    lines += ["", "## Import Cycles"]
-    if cycles:
-        for c in cycles:
-            cycle = c.get("cycle", [])
-            length = c.get("length", len(cycle))
-            if not cycle:
-                continue
-            cycle_path = " -> ".join(cycle + [cycle[0]])
-            lines.append(f"- {length}-file cycle: `{cycle_path}`")
-    else:
-        lines.append("- None detected.")
+    # Circular imports surfaced from file-level dependency graph. Only meaningful
+    # for code — a documents-only corpus has no imports, so the section is pure
+    # noise there ("None detected" on every run). Emit it only when the graph
+    # actually contains code (#1657).
+    _has_code = any(
+        d.get("file_type") == "code" for _, d in G.nodes(data=True)
+    ) or any(
+        d.get("relation") in ("imports", "imports_from")
+        for *_e, d in G.edges(data=True)
+    )
+    if _has_code:
+        from .analyze import find_import_cycles
+        cycles = find_import_cycles(G)
+        lines += ["", "## Import Cycles"]
+        if cycles:
+            for c in cycles:
+                cycle = c.get("cycle", [])
+                length = c.get("length", len(cycle))
+                if not cycle:
+                    continue
+                cycle_path = " -> ".join(cycle + [cycle[0]])
+                lines.append(f"- {length}-file cycle: `{cycle_path}`")
+        else:
+            lines.append("- None detected.")
 
     hyperedges = G.graph.get("hyperedges", [])
     if hyperedges:
@@ -177,7 +287,7 @@ def generate(
             ]
 
     # --- Gaps section ---
-    from .analyze import _is_concept_node, _is_file_node
+    from .analyze import _is_file_node, _is_concept_node
 
     isolated = [
         n for n in G.nodes()
@@ -186,9 +296,13 @@ def generate(
         and not _is_concept_node(G, n)
         and G.nodes[n].get("file_type") != "rationale"
     ]
+    # Same threshold the Summary and Communities headers used (#3148): this
+    # was a hardcoded 3, so with --min-community-size anything else the count
+    # here disagreed with the label text beside it, which already printed
+    # min_community_size.
     thin_communities = {
         cid: nodes for cid, nodes in communities.items()
-        if 0 < sum(1 for n in nodes if not _is_file_node(G, n)) < 3
+        if 0 < sum(1 for n in nodes if not _is_file_node(G, n)) < min_community_size
     }
     gap_count = len(isolated) + len(thin_communities)
 
@@ -197,12 +311,24 @@ def generate(
         if isolated:
             isolated_labels = [G.nodes[n].get("label", n) for n in isolated[:5]]
             suffix = f" (+{len(isolated)-5} more)" if len(isolated) > 5 else ""
+            raw_isolated = sum(1 for n in G.nodes() if G.degree(n) <= 1)
             lines.append(f"- **{len(isolated)} isolated node(s):** {', '.join(f'`{l}`' for l in isolated_labels)}{suffix}")
-            lines.append("  These have ≤1 connection - possible missing edges or undocumented components.")
+            lines.append(
+                "  These have ≤1 connection - possible missing edges or undocumented components. "
+                f"(Counts symbols only; {raw_isolated} node(s) total have ≤1 connection when "
+                "file, concept and rationale nodes are included.)"
+            )
         if thin_communities:
             lines.append(f"- **{len(thin_communities)} thin communities (<{min_community_size} nodes) omitted from report** — run `graphify query` to explore isolated nodes.")
         if amb_pct > 20:
             lines.append(f"- **High ambiguity: {amb_pct}% of edges are AMBIGUOUS.** Review the Ambiguous Edges section above.")
+
+    # --- Work-memory lessons (derived overlay) ---
+    # Preferred sources come from the .graphify_learning.json sidecar; the
+    # query-scoped dead-ends come from the reflect aggregate. Section omitted
+    # entirely when neither is present, so a graph with no work-memory is
+    # byte-identical to the pre-feature report.
+    _learning_section(lines, learning)
 
     if suggested_questions:
         lines += ["", "## Suggested Questions"]
