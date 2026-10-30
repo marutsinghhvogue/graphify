@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
@@ -62,18 +63,24 @@ def _safe_filename(url: str, suffix: str) -> str:
     return name + suffix
 
 
+def _host_is(host: str, *domains: str) -> bool:
+    """True when *host* is one of *domains* or a subdomain of one."""
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
 def _detect_url_type(url: str) -> str:
     """Classify the URL for targeted extraction."""
-    lower = url.lower()
-    if "twitter.com" in lower or "x.com" in lower:
-        return "tweet"
-    if "arxiv.org" in lower:
-        return "arxiv"
-    if "github.com" in lower:
-        return "github"
-    if "youtube.com" in lower or "youtu.be" in lower:
-        return "youtube"
     parsed = urllib.parse.urlparse(url)
+    # Match the host, not the URL text: dropbox.com and netflix.com contain "x.com".
+    host = (parsed.hostname or "").rstrip(".")
+    if _host_is(host, "twitter.com", "x.com"):
+        return "tweet"
+    if _host_is(host, "arxiv.org"):
+        return "arxiv"
+    if _host_is(host, "github.com"):
+        return "github"
+    if _host_is(host, "youtube.com", "youtu.be"):
+        return "youtube"
     path = parsed.path.lower()
     if path.endswith(".pdf"):
         return "pdf"
@@ -300,7 +307,11 @@ def save_query_result(
 
     now = datetime.now(timezone.utc)
     slug = re.sub(r"[^\w]", "_", question.lower())[:50].strip("_")
-    filename = f"query_{now.strftime('%Y%m%d_%H%M%S')}_{slug}.md"
+    # A second-granularity stamp plus a 50-char slug is not unique: two saves in
+    # the same second whose questions share a prefix resolve to one path, and the
+    # later write_text silently replaces the earlier one (#3301). The short uuid
+    # makes every save its own file; the query_ prefix and .md suffix are kept.
+    filename = f"query_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}_{slug}.md"
 
     frontmatter_lines = [
         "---",
