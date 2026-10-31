@@ -1182,13 +1182,14 @@ wheels = [
 
 [[package]]
 name = "graphifyy"
-version = "0.9.85"
+version = "0.9.95"
 source = { editable = "." }
 dependencies = [
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+    { name = "pyyaml" },
     { name = "rapidfuzz" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "tree-sitter" },
@@ -1450,6 +1451,7 @@ requires-dist = [
     { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
     { name = "python-docx", marker = "extra == 'all'" },
     { name = "python-docx", marker = "extra == 'office'" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "robotframework", marker = "extra == 'all'", specifier = ">=4.0" },
     { name = "robotframework", marker = "extra == 'robot'", specifier = ">=4.0" },
@@ -1467,8 +1469,8 @@ requires-dist = [
     { name = "tree-sitter-commonlisp", marker = "extra == 'all'" },
     { name = "tree-sitter-commonlisp", marker = "extra == 'commonlisp'" },
     { name = "tree-sitter-cpp", specifier = ">=0.23,<0.25" },
-    { name = "tree-sitter-dm", marker = "extra == 'all'" },
-    { name = "tree-sitter-dm", marker = "extra == 'dm'" },
+    { name = "tree-sitter-dm", marker = "extra == 'all'", specifier = ">=0.25,<0.26" },
+    { name = "tree-sitter-dm", marker = "extra == 'dm'", specifier = ">=0.25,<0.26" },
     { name = "tree-sitter-elixir", specifier = ">=0.3,<0.5" },
     { name = "tree-sitter-fortran", specifier = ">=0.6,<0.8" },
     { name = "tree-sitter-go", specifier = ">=0.23,<0.26" },
