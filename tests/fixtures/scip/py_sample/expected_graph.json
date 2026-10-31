@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Ground-truth contract for graphify's SCIP reader, derived from index.scip",
+    "(scip-python) and hand-verified against index.observed.json.",
+    "Endpoints are SCIP DESCRIPTORS: the symbol tail after the 4 metadata",
+    "fields '<scheme> <manager> <package> <version>'. The reader's node ids are",
+    "an internal detail; tests match nodes/edges by descriptor via metadata.",
+    "Relations are graphify-native semantics ('calls'), NOT scip_* tags."
+  ],
+  "project": "py_sample",
+  "language": "python",
+  "indexer": "scip-python",
+  "index": "index.scip",
+  "summary": "User and Logger each define save(); process() calls each once. SCIP resolves every call to the correct class. A name-based resolver cannot (two save() defs, two save() call sites).",
+
+  "expected_nodes": [
+    {"descriptor": "`pkg.models`/User#", "label": "User", "kind": "class"},
+    {"descriptor": "`pkg.models`/Logger#", "label": "Logger", "kind": "class"},
+    {"descriptor": "`pkg.models`/User#save().", "label": "save", "kind": "method"},
+    {"descriptor": "`pkg.models`/Logger#save().", "label": "save", "kind": "method"},
+    {"descriptor": "`pkg.service`/process().", "label": "process", "kind": "function"}
+  ],
+
+  "expected_edges": [
+    {"from": "`pkg.service`/process().", "to": "`pkg.models`/User#save().", "relation": "calls", "confidence": "EXTRACTED"},
+    {"from": "`pkg.service`/process().", "to": "`pkg.models`/Logger#save().", "relation": "calls", "confidence": "EXTRACTED"}
+  ],
+
+  "must_not_emit_nodes_matching": ["local 0", "local 1", "(self)", "/__init__:"],
+
+  "precision_invariants": {
+    "process_save_call_edge_count": 2,
+    "_why": "A name-based resolver links each of the 2 call sites to BOTH save() defs => 4 edges (2 spurious). SCIP yields exactly these 2 correct edges. This count is the falsifiable precision claim.",
+    "no_call_edges_from_locals_or_params": true
+  }
+}

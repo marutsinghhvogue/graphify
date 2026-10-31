@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import ast
-import re
-import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any
 
+from graphify.extractors.base import _read_source_text
 from graphify.ids import make_id as _shared_make_id
+from graphify.paths import disambiguate_ambiguous_candidates
 from graphify.security import sanitize_metadata
-
+from graphify.rcfile import effective_suffix
 
 
 @dataclass(frozen=True)
@@ -53,15 +53,34 @@ def node_is_resolvable_symbol(node: dict[str, Any]) -> bool:
     return bool(normalise_callable_label(label))
 
 
-def build_label_index(nodes: list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Build label -> node id list for conservative cross-file resolution."""
+def build_label_index(
+    nodes: list[dict[str, Any]],
+    edges: "list[dict[str, Any]] | None" = None,
+) -> dict[str, list[str]]:
+    """Build label -> node id list for conservative cross-file resolution.
 
+    An enum member can never be the target of a call, in any language that
+    reaches this shared index — but it is a node like any other, and its
+    label can collide with an unrelated bare name (a delegate-typed field
+    named the same as one of its own enum's cases, #4245). When *edges* is
+    given, a node that is the target of a `case_of` edge is excluded, the
+    same way `_build_csharp_type_def_index` already excludes it from TYPE
+    lookup (#3795).
+    """
+
+    case_of_targets: set[str] = set()
+    if edges is not None:
+        case_of_targets = {
+            e.get("target") for e in edges if isinstance(e, dict) and e.get("relation") == "case_of"
+        }
     index: dict[str, list[str]] = {}
     for node in nodes:
         if not node_is_resolvable_symbol(node):
             continue
         node_id = node.get("id")
         if not node_id:
+            continue
+        if node_id in case_of_targets:
             continue
         key = normalise_callable_label(str(node.get("label", "")))
         if not key:
@@ -134,7 +153,7 @@ def parse_python_import_aliases(path: Path) -> dict[str, ImportedSymbol]:
     """
 
     try:
-        source = path.read_text(encoding="utf-8", errors="replace")
+        source = _read_source_text(path, warn=False)
         tree = ast.parse(source)
     except (OSError, SyntaxError):
         return {}
@@ -241,14 +260,14 @@ def resolve_python_import_guided_calls(
     #     downstream `.get("raw_calls", [])` lookup never raises
     result_by_file: dict[str, dict[str, Any]] = {}
     for index, path in enumerate(paths):
-        if path.suffix != ".py":
+        if effective_suffix(path) != ".py":
             continue
         slot: Any = per_file[index] if index < len(per_file) else None
         result_by_file[str(path)] = slot if isinstance(slot, dict) else {"nodes": [], "edges": []}
     resolved_edges: list[dict[str, Any]] = []
 
     for path in paths:
-        if path.suffix != ".py":
+        if effective_suffix(path) != ".py":
             continue
         source_file = str(path)
         aliases = parse_python_import_aliases(path)
@@ -317,8 +336,15 @@ def resolve_cross_file_raw_calls(
     - emitted edges are INFERRED because the raw call alone is not import proof.
     """
 
-    label_index = build_label_index(all_nodes)
+    label_index = build_label_index(all_nodes, all_edges)
     known_pairs = existing_edge_pairs(all_edges)
+    # nid -> source_file, for the shared god-node tie-breakers (#1553) so a
+    # same-named test mock no longer erases a real cross-file call.
+    nid_to_source_file = {
+        str(n.get("id")): str(n.get("source_file", ""))
+        for n in all_nodes
+        if n.get("id")
+    }
     resolved: list[dict[str, Any]] = []
 
     for raw_call in iter_raw_calls(per_file):
@@ -328,9 +354,21 @@ def resolve_cross_file_raw_calls(
         if raw_call.get("is_member_call"):
             continue
         candidates = label_index.get(callee.lower(), [])
-        if len(candidates) != 1:
+        if not candidates:
             continue
-        target = candidates[0]
+        if len(candidates) == 1:
+            target: str | None = candidates[0]
+        else:
+            # Ambiguous bare name. Apply the shared tie-breakers (non-test
+            # preference, then path proximity); resolve only if exactly one
+            # candidate survives, else preserve the god-node guard and skip.
+            target = disambiguate_ambiguous_candidates(
+                candidates,
+                {c: nid_to_source_file.get(c, "") for c in candidates},
+                str(raw_call.get("source_file", "")),
+            )
+            if target is None:
+                continue
         caller = str(raw_call.get("caller_nid", ""))
         if not caller:
             continue
@@ -347,7 +385,9 @@ def resolve_cross_file_raw_calls(
                 "relation": "calls",
                 "context": "call",
                 "confidence": "INFERRED",
-                "confidence_score": 0.8,
+                # 0.85, not 0.8 — the extraction-spec rubric's INFERRED values
+                # are a discrete set and 0.8 is not one of them (#2813).
+                "confidence_score": 0.85,
                 "source_file": raw_call.get("source_file", ""),
                 "source_location": raw_call.get("source_location"),
                 "weight": 1.0,
@@ -366,12 +406,7 @@ def _bash_make_id(*parts: str) -> str:
     return _shared_make_id(*parts)
 
 
-def _bash_file_stem(rel_path: Path) -> str:
-    """Exact copy of extract._file_stem — kept here to avoid an import cycle."""
-    parent = rel_path.parent.name
-    if parent and parent not in (".", ""):
-        return f"{parent}.{rel_path.stem}"
-    return rel_path.stem
+from graphify.extractors.base import _file_stem as _bash_file_stem  # canonical recipe (no import cycle: base imports only graphify.ids)
 
 
 def _file_node_id_for_path(path: Path, root: Path) -> str:

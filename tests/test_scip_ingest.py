@@ -11,7 +11,6 @@ from graphify.scip_ingest import (
     ingest_scip_json,
 )
 
-
 # ---------------------------------------------------------------------------
 # Valid JSON parsing — full-document smoke tests
 # ---------------------------------------------------------------------------

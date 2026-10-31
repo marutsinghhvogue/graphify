@@ -20,6 +20,7 @@ from graphify.security import (
     _MAX_FETCH_BYTES,
     _MAX_GRAPH_FILE_BYTES,
     _MAX_TEXT_BYTES,
+    _max_graph_file_bytes,
     _METADATA_MAX_LIST_ITEMS,
     _METADATA_MAX_VALUE_LEN,
     _sanitize_metadata_string,
@@ -52,6 +53,35 @@ def test_validate_url_rejects_data():
 def test_validate_url_rejects_empty_scheme():
     with pytest.raises(ValueError):
         validate_url("//no-scheme.example.com")
+
+@pytest.mark.parametrize("url", [
+    "http://",
+    "https://",
+    "http:///etc/passwd",
+    "https:///example.com/path",
+])
+def test_validate_url_rejects_missing_hostname(url):
+    with pytest.raises(ValueError, match="without a hostname"):
+        validate_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.com:abc/path",
+    "https://example.com:65536/path",
+    "http://example.com:0/path",
+])
+def test_validate_url_rejects_invalid_port(url):
+    with pytest.raises(ValueError, match="port"):
+        validate_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://user:secret@example.com/path",
+    "https://user@example.com/path",
+])
+def test_validate_url_rejects_embedded_credentials(url):
+    with pytest.raises(ValueError, match="embedded credentials"):
+        validate_url(url)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +248,12 @@ def test_sanitize_label_safe_passthrough():
     assert sanitize_label("MyClass") == "MyClass"
     assert sanitize_label("extract_python") == "extract_python"
 
+def test_sanitize_label_none_returns_empty():
+    # #1775: a node with source_file=None / label=None (synthetic/aggregate
+    # nodes, or JSON `null`) must not raise — .get() returns None, not the
+    # default, when the key is present-but-null.
+    assert sanitize_label(None) == ""
+
 
 # ---------------------------------------------------------------------------
 # check_graph_file_size_cap (#F4 — graph-load memory bomb protection)
@@ -225,6 +261,57 @@ def test_sanitize_label_safe_passthrough():
 
 def test_graph_size_cap_default_is_512_mib():
     assert _MAX_GRAPH_FILE_BYTES == 512 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# _max_graph_file_bytes — GRAPHIFY_MAX_GRAPH_BYTES env-var parsing
+# ---------------------------------------------------------------------------
+
+def test_max_graph_bytes_default_when_unset(monkeypatch):
+    monkeypatch.delenv("GRAPHIFY_MAX_GRAPH_BYTES", raising=False)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+def test_max_graph_bytes_default_when_blank(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "   ")
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+def test_max_graph_bytes_plain_integer(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "671088640")
+    assert _max_graph_file_bytes() == 671088640
+
+
+def test_max_graph_bytes_mb_suffix_is_binary(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "640MB")
+    assert _max_graph_file_bytes() == 640 * 1024 * 1024
+
+
+def test_max_graph_bytes_gb_suffix_is_binary(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "2GB")
+    assert _max_graph_file_bytes() == 2 * 1024 * 1024 * 1024
+
+
+def test_max_graph_bytes_suffix_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "3gb")
+    assert _max_graph_file_bytes() == 3 * 1024 * 1024 * 1024
+
+
+def test_max_graph_bytes_tolerates_space_before_suffix(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "5 GB")
+    assert _max_graph_file_bytes() == 5 * 1024 * 1024 * 1024
+
+
+@pytest.mark.parametrize("bad", ["not-a-number", "1.5GB", "0x10", "640KB"])
+def test_max_graph_bytes_unparseable_falls_back(monkeypatch, bad):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", bad)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
+
+
+@pytest.mark.parametrize("nonpositive", ["0", "-1", "-4GB"])
+def test_max_graph_bytes_nonpositive_falls_back(monkeypatch, nonpositive):
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", nonpositive)
+    assert _max_graph_file_bytes() == _MAX_GRAPH_FILE_BYTES
 
 
 def test_graph_size_cap_under_limit_returns_none(tmp_path):
@@ -403,3 +490,109 @@ def test_sanitize_metadata_bool_not_coerced_to_int():
     assert out["flag_t"] is True
     assert out["flag_f"] is False
     assert out["num"] == 1
+
+
+# ── redact_secrets ────────────────────────────────────────────────────────────
+
+def test_redact_secrets_shapes():
+    from graphify.security import redact_secrets
+    cases = [
+        "ghp_" + "a" * 36,
+        "AKIA" + "IOSFODNN7EXAMPLE",
+        "sk_live_" + "x" * 24,
+        "xoxb-1234567890-abcdefghij",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk",
+    ]
+    for secret in cases:
+        out = redact_secrets(f"see {secret} here")
+        assert secret not in out and "[redacted]" in out, secret
+
+
+def test_redact_secrets_url_password_keeps_host():
+    from graphify.security import redact_secrets
+    assert redact_secrets("postgres://svc:hunter2@db.internal/app") == "postgres://[redacted]@db.internal/app"
+
+
+def test_redact_secrets_leaves_plain_text_and_none():
+    from graphify.security import redact_secrets
+    assert redact_secrets("use chunked processing; see https://example.com/a/b") == "use chunked processing; see https://example.com/a/b"
+    assert redact_secrets(None) == ""
+    assert redact_secrets("") == ""
+
+
+def test_redact_secrets_opaque_bearer_token():
+    # An opaque (non-JWT) Bearer token is redacted; the word "Bearer" is kept.
+    from graphify.security import redact_secrets
+    out = redact_secrets("Authorization: Bearer abcDEF123456ghiJKL789mnop")
+    assert "abcDEF123456ghiJKL789mnop" not in out
+    assert out == "Authorization: Bearer [redacted]"
+
+
+def test_redact_secrets_does_not_mangle_hashes_and_ids():
+    # Over-redaction guard: a credential-redactor that mangled ordinary
+    # high-entropy identifiers would corrupt real rationale labels. A git SHA,
+    # a sha256 digest and a UUID must pass through untouched.
+    from graphify.security import redact_secrets
+    for benign in (
+        "see commit 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b for context",
+        "digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "run id 550e8400-e29b-41d4-a716-446655440000 completed",
+        "class AkiaConfigProvider implements Provider",
+    ):
+        assert redact_secrets(benign) == benign, benign
+
+
+def test_redact_secrets_url_userinfo_edge_cases():
+    # Empty user (redis), `@` and `/` inside the password: all redacted up to
+    # the last `@`, host kept.
+    from graphify.security import redact_secrets
+    assert redact_secrets("redis://:s3cretpass@cache.internal") == "redis://[redacted]@cache.internal"
+    assert redact_secrets("https://svc:p@ss@host/x") == "https://[redacted]@host/x"
+    assert redact_secrets("https://svc:ab/cd@host") == "https://[redacted]@host"
+
+
+def test_redact_secrets_url_without_userinfo_untouched():
+    from graphify.security import redact_secrets
+    for benign in (
+        "https://host:8080/path?email=a@b.com",
+        "see https://example.com:443/a and mail ops@example.com",
+    ):
+        assert redact_secrets(benign) == benign, benign
+
+
+def test_redact_secrets_pem_body_redacted():
+    from graphify.security import redact_secrets
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+    full = f"key:\n-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----\nafter"
+    assert redact_secrets(full) == "key:\n[redacted]\nafter"
+    # No END line (e.g. a truncated docstring): everything after the header goes.
+    assert body not in redact_secrets(f"-----BEGIN PRIVATE KEY-----\n{body}")
+
+
+def test_redact_secrets_tokens_glued_to_identifiers():
+    from graphify.security import redact_secrets
+    for secret, text in (
+        ("AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE_prod"),
+        ("ghp_" + "a" * 36, "token_ghp_" + "a" * 36),
+        ("AIza" + "b" * 35, "AIza" + "b" * 35 + "_backup"),
+    ):
+        out = redact_secrets(text)
+        assert secret not in out and "[redacted]" in out, text
+
+
+def test_redact_secrets_slack_refresh_and_short_jwt():
+    from graphify.security import redact_secrets
+    for secret in (
+        "xoxe-1-" + "c" * 40,
+        "eyJhbGciOiJIUzI1NiJ9.e30." + "d" * 43,
+    ):
+        out = redact_secrets(f"see {secret} here")
+        assert secret not in out and "[redacted]" in out, secret
+
+
+def test_redact_secrets_sk_prefix_prose_untouched():
+    from graphify.security import redact_secrets
+    benign = "# NOTE: use the sk-learn-compatible-estimator-wrapper here"
+    assert redact_secrets(benign) == benign
+    assert "[redacted]" in redact_secrets("key sk-proj-" + "a1" * 12)

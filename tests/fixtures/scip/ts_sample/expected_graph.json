@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "Ground-truth contract for graphify's SCIP reader, derived from index.scip",
+    "(scip-typescript) and hand-verified against index.observed.json.",
+    "Endpoints are SCIP DESCRIPTORS (symbol tail after the 4 metadata fields).",
+    "This fixture exercises BOTH SCIP edge mechanisms: occurrence-containment",
+    "(calls) AND symbol relationships (implements)."
+  ],
+  "project": "ts_sample",
+  "language": "typescript",
+  "indexer": "scip-typescript",
+  "index": "index.scip",
+  "summary": "Dog and Database each define save(); run() calls each once. Dog/Cat implement interface Animal. SCIP resolves the colliding save() calls precisely AND records interface implementation.",
+
+  "expected_nodes": [
+    {"descriptor": "src/`animals.ts`/Animal#", "label": "Animal", "kind": "interface"},
+    {"descriptor": "src/`animals.ts`/Animal#speak().", "label": "speak", "kind": "method"},
+    {"descriptor": "src/`animals.ts`/Dog#", "label": "Dog", "kind": "class"},
+    {"descriptor": "src/`animals.ts`/Dog#speak().", "label": "speak", "kind": "method"},
+    {"descriptor": "src/`animals.ts`/Dog#save().", "label": "save", "kind": "method"},
+    {"descriptor": "src/`animals.ts`/Cat#", "label": "Cat", "kind": "class"},
+    {"descriptor": "src/`animals.ts`/Cat#speak().", "label": "speak", "kind": "method"},
+    {"descriptor": "src/`storage.ts`/Database#", "label": "Database", "kind": "class"},
+    {"descriptor": "src/`storage.ts`/Database#save().", "label": "save", "kind": "method"},
+    {"descriptor": "src/`main.ts`/run().", "label": "run", "kind": "function"}
+  ],
+
+  "expected_edges": [
+    {"from": "src/`main.ts`/run().", "to": "src/`animals.ts`/Dog#speak().", "relation": "calls", "confidence": "EXTRACTED"},
+    {"from": "src/`main.ts`/run().", "to": "src/`animals.ts`/Dog#save().", "relation": "calls", "confidence": "EXTRACTED"},
+    {"from": "src/`main.ts`/run().", "to": "src/`storage.ts`/Database#save().", "relation": "calls", "confidence": "EXTRACTED"},
+
+    {"from": "src/`animals.ts`/Dog#", "to": "src/`animals.ts`/Animal#", "relation": "implements", "confidence": "EXTRACTED"},
+    {"from": "src/`animals.ts`/Cat#", "to": "src/`animals.ts`/Animal#", "relation": "implements", "confidence": "EXTRACTED"},
+    {"from": "src/`animals.ts`/Dog#speak().", "to": "src/`animals.ts`/Animal#speak().", "relation": "implements", "confidence": "EXTRACTED"},
+    {"from": "src/`animals.ts`/Cat#speak().", "to": "src/`animals.ts`/Animal#speak().", "relation": "implements", "confidence": "EXTRACTED"}
+  ],
+
+  "must_not_emit_nodes_matching": ["local 2", "local 5"],
+
+  "precision_invariants": {
+    "run_save_call_edge_count": 2,
+    "_why": "Two save() defs (Dog#save, Database#save) and two save() call sites. A name-based resolver yields 4 save edges (2 spurious); SCIP yields exactly these 2: run->Dog#save and run->Database#save.",
+    "run_calls_exactly": ["src/`animals.ts`/Dog#save().", "src/`storage.ts`/Database#save()."]
+  }
+}

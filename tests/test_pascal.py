@@ -1,8 +1,16 @@
 """Tests for the Pascal/Delphi extractor."""
 from __future__ import annotations
+import importlib.util as _ilu
 from pathlib import Path
 
+import pytest
+
 FIXTURES = Path(__file__).parent / "fixtures"
+
+_needs_pascal = pytest.mark.skipif(
+    _ilu.find_spec("tree_sitter_pascal") is None,
+    reason="tree-sitter-pascal not installed (enum types need the AST path)",
+)
 
 
 def _labels(r):
@@ -83,6 +91,78 @@ def test_pascal_inherits_from_base():
         for e in inherits
     )
     assert found, "TDataProcessor should have at least one inherits edge"
+
+
+@_needs_pascal
+def test_pascal_enum_type_and_values_are_extracted(tmp_path):
+    """A Pascal enumerated type becomes a node with a `case_of` edge per value.
+
+    `declType` matched only class/interface/helper kinds, so an enumerated type
+    (`TColor = (clRed, clGreen, clBlue);`) and all of its values fell through and
+    were dropped — the whole type vanished. An enum's values are its cases, so
+    each becomes a node with a `case_of` edge to the type, matching every other
+    language with enums (Java #1719 / C# / Swift / Scala).
+    """
+    from graphify.extract import extract_pascal
+    p = tmp_path / "colors.pas"
+    p.write_text(
+        "unit Colors;\n"
+        "interface\n"
+        "type\n"
+        "  TColor = (clRed, clGreen, clBlue);\n"
+        "  TNum = Integer;\n"
+        "implementation\n"
+        "end.\n",
+        encoding="utf-8",
+    )
+    r = extract_pascal(p)
+    assert "error" not in r
+    labels = {n["label"] for n in r["nodes"]}
+    # Pre-fix the whole `TColor = (...)` declaration vanished.
+    assert {"TColor", "clRed", "clGreen", "clBlue"} <= labels
+    ids = {n["id"]: n["label"] for n in r["nodes"]}
+    case_of = {
+        (ids.get(e["source"]), ids.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "case_of"
+    }
+    assert ("TColor", "clRed") in case_of
+    assert ("TColor", "clGreen") in case_of
+    assert ("TColor", "clBlue") in case_of
+
+
+@_needs_pascal
+def test_pascal_valued_enum_literals_are_not_nodes(tmp_path):
+    """The valued form (`clRed = 1`) yields the same graph as the plain form.
+
+    An explicit ordinal nests under declEnumValue -> defaultValue, beside the
+    value's identifier. Only the identifier names the case: the literal must not
+    leak into the value's label or become a node of its own (#4071).
+    """
+    from graphify.extract import extract_pascal
+    p = tmp_path / "colors.pas"
+    p.write_text(
+        "unit Colors;\n"
+        "interface\n"
+        "type\n"
+        "  TColor = (clRed = 1, clGreen = 2);\n"
+        "implementation\n"
+        "end.\n",
+        encoding="utf-8",
+    )
+    r = extract_pascal(p)
+    assert "error" not in r
+    labels = {n["label"] for n in r["nodes"]}
+    assert {"TColor", "clRed", "clGreen"} <= labels
+    assert not {"1", "2"} & labels
+    ids = {n["id"]: n["label"] for n in r["nodes"]}
+    cases = {
+        ids.get(e["target"])
+        for e in r["edges"]
+        if e["relation"] == "case_of" and ids.get(e["source"]) == "TColor"
+    }
+    # Exactly the two bare names: not `clRed = 1`, and no edge to a literal.
+    assert cases == {"clRed", "clGreen"}
 
 
 def test_pascal_finds_calls():
@@ -297,8 +377,10 @@ def test_dfm_no_dangling_edges():
 
 
 def test_dfm_binary_returns_empty_not_crash():
+    import pathlib
+    import tempfile
+
     from graphify.extract import extract_delphi_form
-    import tempfile, pathlib
     # Write a fake binary DFM (FF 0A magic header)
     with tempfile.NamedTemporaryFile(suffix=".dfm", delete=False) as f:
         f.write(b"\xff\x0a\x00\x00some binary data")
@@ -320,3 +402,26 @@ def test_dfm_dispatch_registered():
 def test_dfm_detect_extension_registered():
     from graphify.detect import CODE_EXTENSIONS
     assert ".dfm" in CODE_EXTENSIONS
+
+
+def _dup_edges(r):
+    from collections import Counter
+    triples = Counter((e["source"], e["target"], e["relation"]) for e in r["edges"])
+    return {k: v for k, v in triples.items() if v > 1}
+
+
+def test_pascal_no_duplicate_method_edges_tree_sitter():
+    """A class method appears in both the interface declaration and the
+    implementation; each used to emit a `method` edge to the same node, so the
+    graph carried doubled method/contains/inherits edges (skewing degree and
+    breaking the cross-file inherited-call resolver's god-node guard). Edges are
+    now deduped on (source, target, relation)."""
+    from graphify.extract import extract_pascal
+    r = extract_pascal(FIXTURES / "sample.pas")
+    assert _dup_edges(r) == {}, f"duplicate edges: {_dup_edges(r)}"
+
+
+def test_pascal_no_duplicate_method_edges_regex():
+    from graphify.extract import _extract_pascal_regex
+    r = _extract_pascal_regex(FIXTURES / "sample.pas")
+    assert _dup_edges(r) == {}, f"duplicate edges: {_dup_edges(r)}"

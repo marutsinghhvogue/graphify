@@ -14,12 +14,7 @@ These tests mock subprocess.run to:
 from __future__ import annotations
 
 import json
-import sys
-from io import StringIO
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from graphify import llm
 

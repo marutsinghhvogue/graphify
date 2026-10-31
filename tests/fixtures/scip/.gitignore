@@ -1,0 +1,6 @@
+# Regeneration may pull these in; the committed fixtures are the source files,
+# index.scip, index.observed.json and expected_graph.json only.
+node_modules/
+dist/
+*.tsbuildinfo
+__pycache__/

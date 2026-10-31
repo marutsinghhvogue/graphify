@@ -87,6 +87,183 @@ def test_raises_on_nonzero_exit():
             llm._call_claude_cli("dummy", max_tokens=8192)
 
 
+_ERROR_ENVELOPE = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": True,
+    "result": "API Error: Rate limit reached",
+    "stop_reason": "stop_sequence",
+    "usage": {"input_tokens": 0, "output_tokens": 0},
+    "modelUsage": {},
+}
+
+
+def test_nonzero_exit_surfaces_envelope_error_when_stderr_empty():
+    # The CLI reports API failures in the stdout JSON envelope, not on stderr.
+    # Without reading it the user gets a bare "exited 1: " and no cause (#2554).
+    completed = MagicMock(
+        returncode=1, stdout=json.dumps(_ERROR_ENVELOPE), stderr="",
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="Rate limit reached"):
+            llm._call_claude_cli("dummy", max_tokens=8192)
+
+
+def test_raises_on_error_envelope_with_zero_exit():
+    # `claude -p` exits 0 on a rate limit and flags it as is_error in the
+    # envelope. Parsing `result` as model output yields an empty graph that
+    # _response_is_hollow then misreads as truncation, so adaptive retry
+    # bisects the chunk while every request is still being refused (#2554).
+    completed = MagicMock(
+        returncode=0, stdout=json.dumps(_ERROR_ENVELOPE), stderr="",
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="Rate limit reached"):
+            llm._call_claude_cli("dummy", max_tokens=8192)
+
+
+def test_raises_on_array_shaped_error_envelope():
+    # Newer CLIs (>= ~2.1) stream a JSON ARRAY of events with the result
+    # object last; the is_error flag must be honoured in that shape too (#2554).
+    streamed = [
+        {"type": "system", "subtype": "init"},
+        dict(_ERROR_ENVELOPE),
+    ]
+    completed = MagicMock(returncode=0, stdout=json.dumps(streamed), stderr="")
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="Rate limit reached"):
+            llm._call_claude_cli("dummy", max_tokens=8192)
+
+
+def test_call_llm_raises_on_error_envelope():
+    # _call_llm returns envelope["result"] verbatim, so a rate-limited call
+    # hands "API Error: Rate limit reached" back to its callers as if it were
+    # model output — the dedup tiebreaker and community labeling then write
+    # that string into the graph as a label (#2554).
+    completed = MagicMock(
+        returncode=0, stdout=json.dumps(_ERROR_ENVELOPE), stderr="",
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="Rate limit reached"):
+            llm._call_llm("dummy", backend="claude-cli")
+
+
+def test_call_llm_nonzero_exit_surfaces_envelope_error():
+    completed = MagicMock(
+        returncode=1, stdout=json.dumps(_ERROR_ENVELOPE), stderr="",
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="Rate limit reached"):
+            llm._call_llm("dummy", backend="claude-cli")
+
+
+def test_call_llm_success_still_returns_result_text():
+    # Genuine success (exit 0, is_error false) must keep returning the
+    # envelope's result text untouched.
+    envelope = dict(_ENVELOPE, result="a fine label")
+    completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        assert llm._call_llm("dummy", backend="claude-cli") == "a fine label"
+
+
+@pytest.mark.parametrize(
+    ("env_model", "explicit_model", "expected_model"),
+    [
+        ("haiku", None, "haiku"),
+        (" claude-haiku-4-5-20251001 ", None, "claude-haiku-4-5-20251001"),
+        ("haiku", "sonnet", "sonnet"),
+        (None, "sonnet", "sonnet"),
+        (None, None, None),
+        ("", None, None),
+        ("   ", None, None),
+        ("haiku", "", "claude-code-plan"),
+    ],
+)
+def test_call_llm_model_precedence(
+    monkeypatch, env_model, explicit_model, expected_model,
+):
+    """Plain Claude CLI calls honor the env model without changing explicit defaults."""
+    monkeypatch.delenv("GRAPHIFY_CLAUDE_CLI_MODEL", raising=False)
+    if env_model is not None:
+        monkeypatch.setenv("GRAPHIFY_CLAUDE_CLI_MODEL", env_model)
+    envelope = dict(_ENVELOPE, result="a fine label")
+    completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed) as run:
+        if explicit_model is None:
+            result = llm._call_llm("dummy", backend="claude-cli")
+        else:
+            result = llm._call_llm(
+                "dummy", backend="claude-cli", model=explicit_model,
+            )
+    assert result == "a fine label"
+    argv = run.call_args.args[0]
+    if expected_model is None:
+        assert "--model" not in argv
+    else:
+        assert argv.count("--model") == 1
+        assert argv[argv.index("--model") + 1] == expected_model
+
+
+def test_label_batch_uses_claude_cli_model_env(monkeypatch):
+    """The label call chain forwards env-only model selection and still parses labels."""
+    monkeypatch.setenv("GRAPHIFY_CLAUDE_CLI_MODEL", "haiku")
+    envelope = dict(_ENVELOPE, result=json.dumps({"7": "Model Routing"}))
+    completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed) as run:
+        labels = llm._label_batch_with_retry(
+            [7], ["7: Claude CLI, Community Labels"],
+            backend="claude-cli", model=None,
+        )
+    assert labels == {7: "Model Routing"}
+    argv = run.call_args.args[0]
+    assert argv[argv.index("--model") + 1] == "haiku"
+
+
+_MCP_PREAMBLE = (
+    "Client.listTools() called but server does not advertise tools capability "
+    "- returning empty list\n"
+)
+
+
+def test_envelope_survives_a_diagnostic_preamble_on_stdout():
+    """An MCP server that advertises no tools must not kill the whole chunk.
+
+    The CLI writes that notice to stdout ahead of the envelope, so json.loads
+    saw `Client.listTools()...` and raised. The failure lands after the model
+    has answered, so the tokens are already spent and the chunk is dropped --
+    every chunk, for anyone with an MCP server configured.
+    """
+    completed = MagicMock(
+        returncode=0, stdout=_MCP_PREAMBLE + json.dumps(_ENVELOPE), stderr=""
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        result = llm._call_claude_cli("dummy", max_tokens=8192)
+    assert [n["label"] for n in result["nodes"]] == ["Foo", "greet"]
+
+
+def test_envelope_survives_preamble_around_array_shaped_stream():
+    """Same, for the >= 2.1 array-of-events shape."""
+    stream = [{"type": "system", "subtype": "init"}, _ENVELOPE]
+    completed = MagicMock(
+        returncode=0,
+        stdout=_MCP_PREAMBLE + json.dumps(stream) + "\ntrailing noise\n",
+        stderr="",
+    )
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        result = llm._call_claude_cli("dummy", max_tokens=8192)
+    assert [n["label"] for n in result["nodes"]] == ["Foo", "greet"]
+
+
 def test_raises_on_garbage_envelope():
     completed = MagicMock(returncode=0, stdout="not json", stderr="")
     with patch("shutil.which", return_value="/fake/bin/claude"), \
@@ -115,6 +292,100 @@ def test_no_session_persistence_flag_in_subprocess(fake_claude):
     llm._call_claude_cli("dummy", max_tokens=8192)
     call_args = fake_claude.call_args[0][0]
     assert "--no-session-persistence" in call_args
+
+
+# ---------- extraction instructions delivered in the user turn ----------
+# Newer Claude Code CLIs (>= ~2.1) do not honour a --system-prompt that asks
+# for raw JSON: they keep their coding-agent context and reply conversationally
+# to a bare file dump, which parses to zero nodes and gets bisected forever.
+# The instructions must ride in the user turn instead. See the fix for the
+# "hollow response" / infinite-bisection failure on Claude Code 2.1.x.
+
+
+def test_no_system_prompt_flag_in_subprocess(fake_claude):
+    """--system-prompt must NOT be used: the CLI ignores its 'raw JSON only'
+    directive and replies with prose, breaking extraction."""
+    llm._call_claude_cli("dummy source", max_tokens=8192)
+    argv = fake_claude.call_args.args[0]
+    assert "--system-prompt" not in argv
+
+
+def test_extraction_instructions_ride_in_user_turn(fake_claude):
+    """The full extraction schema, an explicit imperative, and the source must
+    all be delivered via stdin (the user turn)."""
+    llm._call_claude_cli("UNIQUE_SOURCE_MARKER", max_tokens=8192)
+    sent = fake_claude.call_args.kwargs["input"]
+    # schema text from _extraction_system
+    assert "graphify semantic extraction agent" in sent
+    # explicit imperative appended before the source
+    assert "output ONLY the JSON object" in sent
+    # the caller's source payload is preserved
+    assert "UNIQUE_SOURCE_MARKER" in sent
+
+
+def test_user_turn_preserves_untrusted_source_guardrails(fake_claude):
+    """The <untrusted_source> guardrails from _extraction_system must survive
+    the move into the user turn (prompt-injection defence is unchanged)."""
+    llm._call_claude_cli("dummy", max_tokens=8192)
+    sent = fake_claude.call_args.kwargs["input"]
+    assert "untrusted_source" in sent
+
+
+# ---------- structured output via --json-schema (#2076) ----------
+# Newer Claude Code CLIs treat a bare file-dump prompt as an agentic task and
+# REPORT the extraction in prose instead of returning JSON, so the graph comes
+# out empty and adaptive-retry bisects forever. When the CLI supports
+# `--json-schema`, graphify constrains the output shape structurally so the
+# model must emit the object regardless of framing. Older CLIs that predate the
+# flag fall back to the user-turn prompt, unchanged.
+
+
+def test_json_schema_flag_added_when_cli_supports_it(monkeypatch, fake_claude):
+    """When the CLI advertises --json-schema, it is passed with a schema that
+    pins the top-level {nodes, edges} shape graphify parses."""
+    monkeypatch.setattr(llm, "_claude_cli_supports_json_schema", lambda cmd: True)
+    llm._call_claude_cli("dummy source", max_tokens=8192)
+    argv = fake_claude.call_args.args[0]
+    assert "--json-schema" in argv
+    schema = json.loads(argv[argv.index("--json-schema") + 1])
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"nodes", "edges"}
+
+
+def test_json_schema_flag_absent_when_cli_lacks_it(monkeypatch, fake_claude):
+    """Older CLIs without --json-schema must not receive the flag (it would be
+    an unknown option) — extraction falls back to the user-turn prompt."""
+    monkeypatch.setattr(llm, "_claude_cli_supports_json_schema", lambda cmd: False)
+    result = llm._call_claude_cli("dummy source", max_tokens=8192)
+    argv = fake_claude.call_args.args[0]
+    assert "--json-schema" not in argv
+    assert len(result["nodes"]) == 2  # result envelope still carries the JSON
+
+
+def test_supports_json_schema_detects_flag_in_help():
+    llm._JSON_SCHEMA_SUPPORT.clear()
+    help_text = "Options:\n  --json-schema <schema>  JSON Schema for structured output\n"
+    completed = MagicMock(returncode=0, stdout=help_text, stderr="")
+    with patch("subprocess.run", return_value=completed):
+        assert llm._claude_cli_supports_json_schema("/fake/claude-new") is True
+
+
+def test_supports_json_schema_false_when_flag_absent():
+    llm._JSON_SCHEMA_SUPPORT.clear()
+    help_text = "Options:\n  --output-format <format>  text|json|stream-json\n"
+    completed = MagicMock(returncode=0, stdout=help_text, stderr="")
+    with patch("subprocess.run", return_value=completed):
+        assert llm._claude_cli_supports_json_schema("/fake/claude-old") is False
+
+
+def test_supports_json_schema_false_and_cached_on_probe_error():
+    """A probe that fails to run is treated as unsupported (safe fallback) and
+    cached so it is not re-probed for every chunk."""
+    llm._JSON_SCHEMA_SUPPORT.clear()
+    with patch("subprocess.run", side_effect=OSError("boom")) as run:
+        assert llm._claude_cli_supports_json_schema("/fake/claude-broken") is False
+        assert llm._claude_cli_supports_json_schema("/fake/claude-broken") is False
+    assert run.call_count == 1
 
 
 # ---------- Windows path resolution (#1072) ----------
@@ -234,7 +505,7 @@ def test_simple_completion_resolves_cmd_shim_on_windows(monkeypatch):
     """The label/_simple_completion path must spawn the resolved claude.cmd on
     Windows; a bare "claude" fails CreateProcess (WinError 2) under npm installs."""
     import json as _json
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     captured = {}
 
@@ -255,3 +526,35 @@ def test_simple_completion_resolves_cmd_shim_on_windows(monkeypatch):
 
     assert out == "ok"
     assert captured["argv0"] == r"C:\npm\claude.cmd"
+
+
+def test_prefers_structured_output_over_prose_result(monkeypatch):
+    """#2076 review: with --json-schema the CLI puts the constrained object in
+    `structured_output` while `result` may be prose (a 'reporting' turn). The
+    backend must parse the structured object; parsing the prose would read as an
+    empty/hollow extraction and bisect forever."""
+    envelope = {
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": "Knowledge graph extracted successfully: 2 nodes, 1 edge.",  # prose only
+        "structured_output": {
+            "nodes": [
+                {"id": "foo_module", "label": "Foo", "file_type": "document", "source_file": "foo.md"},
+                {"id": "foo_greet", "label": "greet", "file_type": "code", "source_file": "foo.md"},
+            ],
+            "edges": [
+                {"source": "foo_module", "target": "foo_greet",
+                 "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0},
+            ],
+            "hyperedges": [],
+        },
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 6, "output_tokens": 11},
+        "modelUsage": {"claude-opus-4-7[1m]": {}},
+    }
+    completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
+    with patch("shutil.which", return_value="/fake/bin/claude"), \
+         patch("subprocess.run", return_value=completed):
+        result = llm._call_claude_cli("dummy", max_tokens=8192)
+    assert len(result["nodes"]) == 2, "must parse structured_output, not the prose result"
+    assert len(result["edges"]) == 1
+    assert result["finish_reason"] == "stop"

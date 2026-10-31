@@ -1,9 +1,7 @@
 """Tests for graphify devin install / uninstall commands."""
-from pathlib import Path
 import sys
+from pathlib import Path
 from unittest.mock import patch
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -152,8 +150,9 @@ def test_devin_uninstall_user_removes_skill_file(tmp_path):
 
 def test_devin_uninstall_user_noop_when_not_installed(tmp_path, capsys):
     """User-scope uninstall prints an appropriate message when nothing is installed."""
-    from graphify.__main__ import main
     import os
+
+    from graphify.__main__ import main
     old_cwd = Path.cwd()
     try:
         os.chdir(tmp_path)

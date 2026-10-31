@@ -4,10 +4,10 @@ graphify/dedup.py."""
 from __future__ import annotations
 
 import json
-import pytest
-import networkx as nx
 from unittest.mock import patch
 
+import networkx as nx
+import pytest
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +64,54 @@ def test_prefix_graph_rewrites_edges():
     H = prefix_graph_for_global(G, "repo1")
     assert H.has_edge("repo1::a", "repo1::b")
     assert not H.has_edge("a", "b")
+
+
+def test_prefix_graph_rewrites_edge_directional_attributes():
+    """prefix_graph_for_global must update directional edge attributes (_src/_tgt)
+    so they stay aligned with the prefixed node IDs (#2261)."""
+    from graphify.build import prefix_graph_for_global
+    G = _make_graph(
+        [{"id": "rota", "label": "rota.js"}, {"id": "collections", "label": "collections.js"}],
+        [{"source": "rota", "target": "collections", "relation": "imports_from", "_src": "rota", "_tgt": "collections"}],
+    )
+    H = prefix_graph_for_global(G, "repoA")
+    assert H.has_edge("repoA::rota", "repoA::collections")
+    data = H.get_edge_data("repoA::rota", "repoA::collections")
+    assert data["_src"] == "repoA::rota"
+    assert data["_tgt"] == "repoA::collections"
+
+
+def test_prefix_graph_offsets_community_ids():
+    """#3014: every input graph numbers its communities from 0, so a merge
+    carrying ids across unchanged fuses community 0 of one repo with community
+    0 of another into a single meta-node in the aggregated view. An offset must
+    shift integer ids into a shared id space and keep the per-repo id in
+    local_community."""
+    from graphify.build import prefix_graph_for_global
+    G = _make_graph(
+        [{"id": "a", "community": 0}, {"id": "b", "community": 1}], [],
+    )
+    H = prefix_graph_for_global(G, "repoA", community_offset=5)
+    assert H.nodes["repoA::a"]["community"] == 5
+    assert H.nodes["repoA::a"]["local_community"] == 0
+    assert H.nodes["repoA::b"]["community"] == 6
+    assert H.nodes["repoA::b"]["local_community"] == 1
+
+
+def test_prefix_graph_zero_offset_leaves_communities_untouched():
+    """The default offset must be a no-op — no community rewrite, no
+    local_community noise — so single-repo callers (global store, tests)
+    keep their ids exactly as stored."""
+    from graphify.build import prefix_graph_for_global
+    G = _make_graph(
+        [{"id": "a", "community": 0}, {"id": "b", "community": 1}], [],
+    )
+    H = prefix_graph_for_global(G, "repoA")
+    assert H.nodes["repoA::a"]["community"] == 0
+    assert H.nodes["repoA::b"]["community"] == 1
+    assert "local_community" not in H.nodes["repoA::a"]
+    assert "local_community" not in H.nodes["repoA::b"]
+
 
 
 def test_prune_repo_removes_correct_nodes():
@@ -140,7 +188,7 @@ def test_global_add_two_repos_no_collision(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_graph_path), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_manifest_path):
-        from graphify.global_graph import global_add, _load_global_graph
+        from graphify.global_graph import _load_global_graph, global_add
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()
@@ -239,8 +287,9 @@ def test_dedup_ok_with_no_repo_attr():
 
 def test_merge_graphs_prefixes_ids(tmp_path):
     """merge-graphs should prefix node IDs with repo name to avoid silent collision."""
-    from graphify.build import prefix_graph_for_global
     from networkx.readwrite import json_graph as jg
+
+    from graphify.build import prefix_graph_for_global
 
     # Two graphs with same node ID
     G1 = _make_graph([{"id": "userservice", "label": "UserService", "source_file": "src/user.py"}])
@@ -305,7 +354,7 @@ def test_global_add_rewires_edges_to_deduplicated_externals(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add, _load_global_graph
+        from graphify.global_graph import _load_global_graph, global_add
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()

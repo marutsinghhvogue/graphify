@@ -11,11 +11,11 @@ Hash family (Mersenne-prime permutations) and LSH band structure are
 equivalent to datasketch so dedup quality is unchanged.
 """
 from __future__ import annotations
+
 import hashlib
 import struct
 
 import numpy as np
-
 
 _MP = np.uint64((1 << 61) - 1)  # Mersenne prime for the hash family
 _MH = np.uint64(0xFFFF_FFFF)    # mask to 32-bit values

@@ -1,10 +1,13 @@
 """Community detection on NetworkX graphs. Uses Leiden (graspologic) if available, falls back to Louvain (networkx). Splits oversized communities. Returns cohesion scores."""
 from __future__ import annotations
+
 import contextlib
 import inspect
 import io
 import json
+import os
 import sys
+
 import networkx as nx
 
 
@@ -19,11 +22,95 @@ def _suppress_output():
     return contextlib.redirect_stdout(io.StringIO())
 
 
+def _native_leiden(stable: nx.Graph, resolution: float) -> dict[str, int] | None:
+    """Call graspologic_native.leiden() directly, bypassing graspologic's own
+    package import.
+
+    graspologic.partition.leiden() is a thin wrapper around exactly this
+    native (Rust) call. Importing the *package* — as opposed to the native
+    extension module it depends on — pulls in graspologic.layouts, which
+    imports umap, which imports pynndescent, which numba-JIT-compiles at
+    import time for a layout algorithm this function never calls: measured
+    at 7-19s of one-time import cost against a ~1s native call and a ~1.4s
+    full round trip (conversion + call + map-back) — see the "third update"
+    in GRAPHIFY_BUILD_PERF.md for the measurements this is based on.
+
+    Returns None (the caller falls through to the graspologic.partition.leiden
+    path, then to the networkx Louvain fallback) if graspologic_native isn't
+    installed, or if `stable` isn't the plain undirected, non-multigraph
+    input leiden actually supports — the same shape check
+    graspologic.partition.leiden itself makes before calling the same native
+    function.
+    """
+    try:
+        import graspologic_native as gn
+    except ImportError:
+        return None
+
+    if stable.is_directed() or stable.is_multigraph():
+        return None
+
+    # graspologic_native identifies nodes by their string form; two DISTINCT
+    # node objects that happen to stringify the same way would silently merge
+    # under it (this is exactly what graspologic.partition.leiden's own
+    # _IdentityMapper guards against). Graphify's own node IDs are already
+    # unique strings by construction — extractors/resolution.py's
+    # _disambiguate_colliding_node_ids salts any two distinct nodes that would
+    # otherwise share a string id before the graph is ever built — so this is
+    # a defensive check on an assumption that should never actually trip, not
+    # an expected path. One pass over the nodes, cheaper than an
+    # _IdentityMapper-style dict-store-per-edge-endpoint.
+    id_to_node: dict[str, object] = {}
+    for node in stable.nodes():
+        key = str(node)
+        existing = id_to_node.get(key)
+        if existing is not None and existing != node:
+            return None  # let graspologic.partition.leiden's own check handle/raise on this
+        id_to_node[key] = node
+
+    edges = [
+        (str(u), str(v), float(attrs.get("weight", 1.0)))
+        for u, v, attrs in stable.edges(data=True)
+    ]
+
+    try:
+        old_stderr = sys.stderr
+        try:
+            sys.stderr = io.StringIO()
+            with _suppress_output():
+                _quality, native_partitions = gn.leiden(
+                    edges=edges,
+                    starting_communities=None,
+                    resolution=resolution,
+                    randomness=0.001,
+                    iterations=1,
+                    use_modularity=True,
+                    seed=42,
+                    trials=1,
+                )
+        finally:
+            sys.stderr = old_stderr
+    except Exception:
+        return None
+
+    partition = {
+        id_to_node[node_id]: community
+        for node_id, community in native_partitions.items()
+    }
+    next_community = max(partition.values(), default=-1) + 1
+    for node in stable.nodes():
+        if node not in partition:
+            partition[node] = next_community
+            next_community += 1
+    return partition
+
+
 def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     """Run community detection. Returns {node_id: community_id}.
 
-    Tries Leiden (graspologic) first — best quality.
-    Falls back to Louvain (built into networkx) if graspologic is not installed.
+    Tries Leiden (graspologic_native directly, then graspologic) first — best
+    quality. Falls back to Louvain (built into networkx) if neither is
+    installed.
 
     resolution > 1.0 → more, smaller communities.
     resolution < 1.0 → fewer, larger communities.
@@ -33,16 +120,30 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     """
     stable = nx.Graph()
     stable.add_nodes_from(sorted(G.nodes(), key=str))
+    # Canonicalise the endpoint pair before sorting. On an undirected graph the
+    # (u, v) orientation each edge is yielded with comes from adjacency
+    # iteration, which follows CPython's per-process string-hash order - so the
+    # SAME edge appears as (A, B) in one run and (B, A) in the next. Sorting on
+    # the raw pair therefore does not canonicalise anything: the edge lands in a
+    # different position, `stable` is built in a different insertion order, and
+    # Louvain - order-sensitive even with a fixed seed - can return a different
+    # grouping. Measured on a 914-node graph: identical input, identical
+    # first-pass partition, but the cohesion-split pass produced 70 communities
+    # under PYTHONHASHSEED=1 and 69 under =2. Sorting the pair itself removes
+    # the dependency; for nx.Graph the orientation carries no meaning anyway.
     edge_rows = sorted(
         G.edges(data=True),
         key=lambda row: (
-            str(row[0]),
-            str(row[1]),
+            *sorted((str(row[0]), str(row[1]))),
             json.dumps(row[2], sort_keys=True, ensure_ascii=False, default=str),
         ),
     )
     for src, tgt, attrs in edge_rows:
         stable.add_edge(src, tgt, **attrs)
+
+    native_result = _native_leiden(stable, resolution)
+    if native_result is not None:
+        return native_result
 
     try:
         from graspologic.partition import leiden
@@ -83,10 +184,59 @@ _COHESION_SPLIT_THRESHOLD = 0.05 # re-split communities with cohesion below this
 _COHESION_SPLIT_MIN_SIZE = 50    # only cohesion-split if community has at least this many nodes
 
 
+def label_communities_by_hub(
+    G: nx.Graph, communities: dict[int, list[str]]
+) -> dict[int, str]:
+    """Deterministic, LLM-free community labels: name each community after its
+    highest-degree member — the structural hub — so a report reads ``auth`` /
+    ``log_action`` instead of ``Community 70``. Degree is measured on the full graph
+    ``G``; ties break by node id for run-to-run stability. A community whose members
+    are all absent from ``G`` falls back to ``Community {cid}``.
+
+    Used as the default (no-backend) labeler; an LLM naming pass, when configured,
+    overrides these with richer names.
+    """
+    labels: dict[int, str] = {}
+    for cid, members in communities.items():
+        present = [n for n in members if n in G]
+        if not present:
+            labels[cid] = f"Community {cid}"
+            continue
+        # highest degree wins; ties broken by node id (ascending) for determinism
+        hub = min(present, key=lambda n: (-G.degree(n), str(n)))
+        name = str(G.nodes[hub].get("label") or hub).strip()
+        if name.endswith("()"):
+            name = name[:-2]
+        labels[cid] = name or f"Community {cid}"
+    return labels
+
+
+def community_member_sigs(communities: dict[int, list[str]]) -> dict[int, str]:
+    """Per-community membership fingerprints: ``{cid: sha256(sorted member ids)}``.
+
+    Persisted next to ``.graphify_labels.json`` so a later ``cluster-only`` can tell
+    which communities actually changed since labeling. A cid whose members no longer
+    hash the same is a different community — reusing its old (LLM) label there is the
+    "stale label after re-scoping" bug this guards against. Deterministic; independent
+    of cid index, node order, and machine.
+    """
+    import hashlib
+
+    sigs: dict[int, str] = {}
+    for cid, members in communities.items():
+        h = hashlib.sha256()
+        for nid in sorted(str(n) for n in members):
+            h.update(nid.encode("utf-8", "replace"))
+            h.update(b"\x00")
+        sigs[cid] = h.hexdigest()[:16]
+    return sigs
+
+
 def cluster(
     G: nx.Graph,
     resolution: float = 1.0,
     exclude_hubs_percentile: float | None = None,
+    ambiguous_scale: float = 0.5,
 ) -> dict[int, list[str]]:
     """Run Leiden community detection. Returns {community_id: [node_ids]}.
 
@@ -101,8 +251,18 @@ def cluster(
         <1.0 = fewer larger communities. Default 1.0.
     exclude_hubs_percentile: if set (0-100), nodes whose degree exceeds this
         percentile are excluded from partitioning and reattached to their
-        majority-vote neighbour community afterwards. Useful for staging/utility
-        super-hubs that inflate god-node rankings (#919).
+        majority-vote neighbour community afterwards. Nodes whose only
+        neighbours are excluded hubs follow them, by the same vote. Useful for
+        staging/utility super-hubs that inflate god-node rankings (#919).
+    ambiguous_scale: multiplier applied to the ``weight`` attribute of
+        ``AMBIGUOUS`` edges before partitioning. Default 0.5 — halves the
+        modularity contribution of low-confidence edges so they do not
+        glue otherwise-independent clusters together. Set to 1.0 to disable
+        (treat AMBIGUOUS edges identically to EXTRACTED/INFERRED), or 0.0
+        to drop them from clustering entirely (they still appear in the
+        graph and in `/graphify path`/`explain` output — only partitioning
+        is affected). Overridden by ``GRAPHIFY_AMBIGUOUS_SCALE`` env var
+        when that is set to a parseable float. See #4199.
     """
     if G.number_of_nodes() == 0:
         return {}
@@ -110,6 +270,24 @@ def cluster(
         G = G.to_undirected()
     if G.number_of_edges() == 0:
         return {i: [n] for i, n in enumerate(sorted(G.nodes))}
+
+    # #4199 — scale AMBIGUOUS edge weights so they do not warp partitioning.
+    # Env override lets `GRAPHIFY_AMBIGUOUS_SCALE=1.0 graphify ...` restore the
+    # pre-fix behavior without a code change. Malformed values are ignored.
+    env_scale = os.environ.get("GRAPHIFY_AMBIGUOUS_SCALE")
+    if env_scale is not None:
+        try:
+            ambiguous_scale = float(env_scale)
+        except ValueError:
+            pass
+    if ambiguous_scale != 1.0 and any(
+        d.get("confidence") == "AMBIGUOUS" for _, _, d in G.edges(data=True)
+    ):
+        G = G.copy()
+        for u, v, d in G.edges(data=True):
+            if d.get("confidence") == "AMBIGUOUS":
+                base = float(d.get("weight", 1.0))
+                d["weight"] = base * ambiguous_scale
 
     # Compute hub exclusion set before removing anything so degree is based on full graph
     hub_nodes: set[str] = set()
@@ -126,6 +304,21 @@ def cluster(
     excluded = hub_nodes
     isolates = [n for n in G.nodes() if G.degree(n) == 0 and n not in excluded]
     connected_nodes = [n for n in G.nodes() if G.degree(n) > 0 and n not in excluded]
+    # A node whose only neighbours are excluded hubs is isolated in the
+    # partitioned subgraph purely because of the exclusion. Hold it out of the
+    # partition and place it with its hub(s) below, instead of letting it come
+    # back as a singleton cut off from the only node it connects to.
+    stranded: list[str] = []
+    if hub_nodes:
+        # A self-loop is not a neighbour: judge a node by its other neighbours.
+        stranded = [
+            n for n in connected_nodes
+            if (nbs := [nb for nb in G.neighbors(n) if nb != n])
+            and all(nb in hub_nodes for nb in nbs)
+        ]
+        if stranded:
+            _stranded = set(stranded)
+            connected_nodes = [n for n in connected_nodes if n not in _stranded]
     connected = G.subgraph(connected_nodes)
 
     raw: dict[int, list[str]] = {}
@@ -157,6 +350,18 @@ def cluster(
                 raw[next_cid] = [hub]
                 node_community[hub] = next_cid
                 next_cid += 1
+        # Every neighbour of a stranded node is a hub, and every hub is placed
+        # by now, so the same majority vote always has a winner.
+        for node in sorted(stranded, key=str):
+            votes = {}
+            for nb in G.neighbors(node):
+                if nb == node:
+                    continue
+                cid = node_community[nb]
+                votes[cid] = votes.get(cid, 0) + 1
+            best = min(votes, key=lambda c: (-votes[c], c))
+            raw[best].append(node)
+            node_community[node] = best
 
     # Split oversized communities
     max_size = max(_MIN_SPLIT_SIZE, int(G.number_of_nodes() * _MAX_COMMUNITY_FRACTION))
@@ -212,7 +417,14 @@ def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
     if n <= 1:
         return 1.0
     subgraph = G.subgraph(community_nodes)
-    actual = subgraph.number_of_edges()
+    # Exclude self-loops. ``build_from_json`` deliberately keeps recursive
+    # ``calls`` self-edges ("real program structure rather than
+    # import-resolution artifacts"), but ``possible`` below counts distinct
+    # node PAIRS only, so a self-loop adds to the numerator without adding to
+    # the denominator and pushes the ratio past 1.0 -- a two-node community
+    # holding one recursive function scores 2.0. Drop them so numerator and
+    # denominator measure the same thing.
+    actual = subgraph.number_of_edges() - nx.number_of_selfloops(subgraph)
     possible = n * (n - 1) / 2
     return actual / possible if possible > 0 else 0.0
 
@@ -270,3 +482,28 @@ def remap_communities_to_previous(
     for new_cid, nodes in communities.items():
         remapped[new_to_final[new_cid]] = sorted(nodes)
     return dict(sorted(remapped.items(), key=lambda kv: kv[0]))
+
+
+def label_still_applies(
+    cid: int,
+    current_members: list[str],
+    previous_node_community: dict[str, int],
+    saved_sig: str | None,
+    current_sig: str | None,
+) -> bool:
+    """Whether a saved label still names this community (#2298).
+
+    An equal membership signature keeps the label. Otherwise the label stays
+    only when the nodes shared with the previous assignment are a strict
+    majority of both the previous set and the current set. A one-node fragment
+    of a large community fails that test, so remap reusing the old id is not
+    enough to keep the name.
+    """
+    if saved_sig is not None and current_sig is not None and saved_sig == current_sig:
+        return True
+    saved = {str(node) for node, old in previous_node_community.items() if old == cid}
+    current = {str(node) for node in current_members}
+    if not saved or not current:
+        return False
+    overlap = len(saved & current)
+    return overlap * 2 > len(saved) and overlap * 2 > len(current)

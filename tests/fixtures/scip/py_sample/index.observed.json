@@ -1,0 +1,283 @@
+{
+  "documents": [
+    {
+      "relative_path": "pkg/__init__.py",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 pkg/__init__:",
+          "symbol_roles": 1
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-python python py_sample 1.0.0 pkg/__init__:"
+        }
+      ]
+    },
+    {
+      "relative_path": "pkg/models.py",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/__init__:",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            0,
+            6,
+            10
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            3,
+            11
+          ]
+        },
+        {
+          "range": [
+            1,
+            8,
+            12
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#save().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            4,
+            3,
+            11
+          ]
+        },
+        {
+          "range": [
+            1,
+            13,
+            17
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#save().(self)",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            6,
+            6,
+            12
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            6,
+            0,
+            12,
+            11
+          ]
+        },
+        {
+          "range": [
+            10,
+            8,
+            12
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#save().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            10,
+            4,
+            12,
+            11
+          ]
+        },
+        {
+          "range": [
+            10,
+            13,
+            17
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#save().(self)",
+          "symbol_roles": 1
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#save()."
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#save().(self)"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#save()."
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#save().(self)"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/__init__:"
+        }
+      ]
+    },
+    {
+      "relative_path": "pkg/service.py",
+      "language": "",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.service`/__init__:",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            0,
+            5,
+            15
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/__init__:",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            0,
+            23,
+            29
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            0,
+            31,
+            35
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            3,
+            4,
+            11
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.service`/process().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            0,
+            8,
+            14
+          ]
+        },
+        {
+          "range": [
+            4,
+            4,
+            5
+          ],
+          "symbol": "local 0",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            4,
+            8,
+            12
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            5,
+            4,
+            5
+          ],
+          "symbol": "local 0",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            5,
+            6,
+            10
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/User#save().",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            7,
+            4,
+            7
+          ],
+          "symbol": "local 1",
+          "symbol_roles": 1
+        },
+        {
+          "range": [
+            7,
+            10,
+            16
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            8,
+            4,
+            7
+          ],
+          "symbol": "local 1",
+          "symbol_roles": 8
+        },
+        {
+          "range": [
+            8,
+            8,
+            12
+          ],
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.models`/Logger#save().",
+          "symbol_roles": 8
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "local 0"
+        },
+        {
+          "symbol": "local 1"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.service`/__init__:"
+        },
+        {
+          "symbol": "scip-python python py_sample 1.0.0 `pkg.service`/process()."
+        }
+      ]
+    }
+  ]
+}

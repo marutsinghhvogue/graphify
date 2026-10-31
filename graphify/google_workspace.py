@@ -15,9 +15,9 @@ import shutil
 import subprocess
 import tempfile
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Any
-
+from typing import Any
 
 GOOGLE_WORKSPACE_EXTENSIONS = {".gdoc", ".gsheet", ".gslides"}
 
@@ -29,7 +29,41 @@ def google_workspace_enabled(value: str | None = None) -> bool:
 
 
 def _safe_yaml_str(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ")
+    """Escape a value for a YAML double-quoted scalar.
+
+    Same escaping as graphify.ingest._yaml_str (F-009): backslash, quote,
+    tab, NUL and other C0/DEL controls, plus the Unicode line breaks
+    U+2028, U+2029 and U+0085, so a hostile shortcut url or file id cannot
+    break out of the scalar and inject sibling frontmatter keys.
+    """
+    if value is None:
+        return ""
+    out: list[str] = []
+    for ch in str(value):
+        cp = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\0":
+            out.append("\\0")
+        elif cp == 0x2028:
+            out.append("\\L")
+        elif cp == 0x2029:
+            out.append("\\P")
+        elif cp == 0x0085:
+            out.append("\\x85")
+        elif cp < 0x20 or cp == 0x7F:
+            out.append(f"\\x{cp:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _extract_file_id_from_url(url: str) -> str | None:
@@ -121,8 +155,21 @@ def _run_gws_export(file_id: str, mime_type: str, output: Path, resource_key: st
         raise RuntimeError(f"gws export failed for {file_id}: {stderr}")
 
 
-def _sidecar_path(path: Path, out_dir: Path) -> Path:
-    name_hash = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:8]
+def _sidecar_path(path: Path, out_dir: Path, root: "Path | None" = None) -> Path:
+    # Hash the scan-root-relative, NFC-normalized path — not the absolute path.
+    # The absolute form salts the sidecar name with the checkout location, so the
+    # same shortcut in two clones/worktrees emits differently-named byte-identical
+    # sidecars, each ingested as a distinct source doc when graphify-out/ is
+    # committed (#2059; mirrors convert_office_file). NFC guards macOS NFD drift
+    # (#1226). The relative path still disambiguates same-stem files.
+    import unicodedata
+    if root is None:
+        root = out_dir.parent.parent
+    try:
+        key = path.resolve().relative_to(Path(root).resolve()).as_posix()
+    except (ValueError, OSError):
+        key = str(path.resolve())
+    name_hash = hashlib.sha256(unicodedata.normalize("NFC", key).encode()).hexdigest()[:8]
     return out_dir / f"{path.stem}_{name_hash}.md"
 
 
@@ -152,6 +199,7 @@ def convert_google_workspace_file(
     out_dir: Path,
     *,
     xlsx_to_markdown: Callable[[Path], str] | None = None,
+    root: "Path | None" = None,
 ) -> Path | None:
     """Export a Google Workspace shortcut to a Markdown sidecar.
 
@@ -164,7 +212,7 @@ def convert_google_workspace_file(
 
     shortcut = read_google_shortcut(path)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = _sidecar_path(path, out_dir)
+    out_path = _sidecar_path(path, out_dir, root=root)
 
     if ext == ".gdoc":
         with tempfile.NamedTemporaryFile("w+b", suffix=".md", delete=False, dir=out_dir) as tmp:

@@ -1,6 +1,7 @@
 """Tests for graphify/prs.py."""
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
@@ -11,13 +12,20 @@ import pytest
 from graphify.prs import (
     PRInfo,
     _classify,
+    _gh,
     _parse_ci,
     _path_match,
     build_community_labels,
     compute_pr_impact,
+    fetch_pr_files,
     fetch_worktrees,
     format_prs_text,
     _detect_default_branch,
+    _parse_pr_dict,
+    fetch_pr,
+    fetch_prs,
+    attach_graph_impact,
+    cmd_prs,
 )
 
 
@@ -124,6 +132,55 @@ class TestParseCi:
             {"conclusion": "FAILURE", "status": "COMPLETED"},
         ]
         assert _parse_ci(rollup) == "FAILURE"
+
+    def test_unfinished_check_run_statuses_are_pending(self):
+        """GitHub's CheckStatusState has six values — REQUESTED, QUEUED,
+        IN_PROGRESS, COMPLETED, WAITING, PENDING — and every one but COMPLETED
+        means the run has no conclusion yet. Reading only IN_PROGRESS/QUEUED
+        made a WAITING run (a job held by a deployment protection rule),
+        a REQUESTED one and a PENDING one invisible: NONE on their own."""
+        for status in ("REQUESTED", "QUEUED", "IN_PROGRESS", "WAITING", "PENDING"):
+            rollup = [{"__typename": "CheckRun", "name": "deploy",
+                       "status": status, "conclusion": ""}]
+            assert _parse_ci(rollup) == "PENDING", status
+
+    def test_unfinished_check_run_beside_passing_one_is_pending(self):
+        """...and worse, masked by a sibling that did pass, so a PR still
+        waiting on a gated job was classified READY/APPROVED, not PENDING."""
+        for status in ("REQUESTED", "WAITING", "PENDING"):
+            rollup = [
+                {"__typename": "CheckRun", "name": "test",
+                 "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "deploy",
+                 "status": status, "conclusion": ""},
+            ]
+            assert _parse_ci(rollup) == "PENDING", status
+
+    def test_status_context_failure_is_failure(self):
+        """A commit status from external CI (StatusContext) carries only `state`,
+        no conclusion/status; a failing one must not read as NONE."""
+        rollup = [{"__typename": "StatusContext", "context": "ci/jenkins", "state": "FAILURE"}]
+        assert _parse_ci(rollup) == "FAILURE"
+
+    def test_status_context_error_is_failure(self):
+        rollup = [{"__typename": "StatusContext", "context": "ci/jenkins", "state": "ERROR"}]
+        assert _parse_ci(rollup) == "FAILURE"
+
+    def test_status_context_failure_beside_passing_check_run_is_failure(self):
+        rollup = [
+            {"__typename": "CheckRun", "conclusion": "SUCCESS", "status": "COMPLETED"},
+            {"__typename": "StatusContext", "context": "ci/jenkins", "state": "FAILURE"},
+        ]
+        assert _parse_ci(rollup) == "FAILURE"
+
+    def test_status_context_pending_is_pending(self):
+        for state in ("PENDING", "EXPECTED"):
+            rollup = [{"__typename": "StatusContext", "context": "ci/jenkins", "state": state}]
+            assert _parse_ci(rollup) == "PENDING", state
+
+    def test_status_context_success_is_success(self):
+        rollup = [{"__typename": "StatusContext", "context": "ci/jenkins", "state": "SUCCESS"}]
+        assert _parse_ci(rollup) == "SUCCESS"
 
 
 # ── _path_match ───────────────────────────────────────────────────────────────
@@ -347,6 +404,17 @@ class TestDetectDefaultBranch:
         ):
             assert _detect_default_branch() == "develop"
 
+    def test_git_default_branch_with_slash_is_kept_whole(self):
+        """A default branch named release/2.x must not be cut down to 2.x, or every
+        PR targeting it is classified as targeting the wrong base."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "refs/remotes/origin/release/2.x\n"
+        with patch("graphify.prs._gh", return_value=None), patch(
+            "graphify.prs.subprocess.run", return_value=mock_result
+        ):
+            assert _detect_default_branch() == "release/2.x"
+
     def test_both_fail_returns_main(self):
         mock_result = MagicMock()
         mock_result.returncode = 1
@@ -372,6 +440,27 @@ class TestDetectDefaultBranch:
             side_effect=subprocess.TimeoutExpired("git", 5),
         ):
             assert _detect_default_branch() == "main"
+
+    def test_repo_positional_arg_in_gh_repo_view(self):
+        """gh repo view takes repo positionally; --repo is not a valid flag (#3318)."""
+        with patch(
+            "graphify.prs._gh",
+            return_value={"defaultBranchRef": {"name": "main"}},
+        ) as mock_gh:
+            branch = _detect_default_branch(repo="owner/repo")
+        assert branch == "main"
+        args, _ = mock_gh.call_args
+        assert args == ("repo", "view", "owner/repo", "--json", "defaultBranchRef")
+        assert "--repo" not in args
+
+    def test_explicit_repo_gh_fails_returns_main_without_local_git(self):
+        """When an explicit repo is supplied and gh fails, return 'main' without
+        inspecting the local repository (#3318)."""
+        with patch("graphify.prs._gh", return_value=None), \
+             patch("graphify.prs.subprocess.run") as mock_git:
+            branch = _detect_default_branch(repo="owner/repo")
+        assert branch == "main"
+        mock_git.assert_not_called()
 
 
 # ── build_community_labels ─────────────────────────────────────────────────────
@@ -401,3 +490,328 @@ class TestBuildCommunityLabels:
     def test_empty_nodes(self):
         assert build_community_labels({}) == {}
         assert build_community_labels({"nodes": []}) == {}
+
+
+# ── Windows cp1252 subprocess-decode hardening (decode-side sibling of #1505) ──
+
+class TestSubprocessOutputEncoding:
+    """prs.py reads gh/git/claude output via subprocess.run(text=True). Without an
+    explicit encoding= the stdout is decoded with the locale codec (cp1252 on
+    Windows), so non-Latin1 output (emoji, non-ASCII PR titles/logins/paths)
+    fails: the reader thread raises UnicodeDecodeError, subprocess.run returns
+    stdout=None, and the caller then dies on json.loads(None) / None.splitlines().
+    Every call must pass encoding="utf-8" so decoding matches Linux/macOS.
+    #1505 fixed the same defect on the llm.py claude-cli subprocess.
+    """
+
+    _NON_LATIN1 = "docs: add Persian (فارسی) 🏆"
+
+    def test_fixture_is_cp1252_undecodable(self):
+        """Guard: the fixture's UTF-8 bytes must be undecodable as cp1252, else
+        these tests would prove nothing about the failure surface."""
+        raw = self._NON_LATIN1.encode("utf-8")
+        with pytest.raises(UnicodeDecodeError):
+            raw.decode("cp1252")
+        assert raw.decode("utf-8") == self._NON_LATIN1
+
+    def test_gh_decodes_output_as_utf8(self):
+        completed = MagicMock(
+            returncode=0, stdout=json.dumps([{"title": self._NON_LATIN1}]), stderr=""
+        )
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            data = _gh("pr", "list", "--json", "title")
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("encoding") == "utf-8", (
+            f"_gh subprocess must use encoding='utf-8'; got {kwargs.get('encoding')!r}"
+        )
+        assert data == [{"title": self._NON_LATIN1}]
+
+    def test_fetch_pr_files_decodes_output_as_utf8(self):
+        completed = MagicMock(returncode=0, stdout="src/café.py\n", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            fetch_pr_files(1)
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("encoding") == "utf-8"
+
+    def test_fetch_worktrees_decodes_output_as_utf8(self):
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            fetch_worktrees()
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("encoding") == "utf-8"
+
+    def test_detect_default_branch_decodes_output_as_utf8(self):
+        # Force the git symbolic-ref fallback: gh returns None -> git subprocess runs.
+        completed = MagicMock(returncode=0, stdout="refs/remotes/origin/v8\n", stderr="")
+        with patch("graphify.prs._gh", return_value=None), \
+             patch("subprocess.run", return_value=completed) as mock_run:
+            _detect_default_branch()
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("encoding") == "utf-8"
+
+
+# ── Subprocess stdin isolation (#3318) ─────────────────────────────────────────
+
+class TestSubprocessStdinIsolation:
+    """Subprocesses in prs.py must isolate stdin with subprocess.DEVNULL so they
+    never inherit an open stdin pipe from the MCP stdio server (#3318)."""
+
+    def test_gh_passes_devnull_stdin(self):
+        completed = MagicMock(returncode=0, stdout="[]", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            _gh("repo", "view")
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("stdin") == subprocess.DEVNULL
+
+    def test_fetch_pr_files_passes_devnull_stdin(self):
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            fetch_pr_files(1)
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("stdin") == subprocess.DEVNULL
+
+    def test_fetch_worktrees_passes_devnull_stdin(self):
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            fetch_worktrees()
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("stdin") == subprocess.DEVNULL
+
+    def test_detect_default_branch_git_fallback_passes_devnull_stdin(self):
+        completed = MagicMock(returncode=0, stdout="refs/remotes/origin/main\n", stderr="")
+        with patch("graphify.prs._gh", return_value=None), \
+             patch("subprocess.run", return_value=completed) as mock_run:
+            _detect_default_branch()
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("stdin") == subprocess.DEVNULL
+
+
+# ── _parse_pr_dict & fetch_pr (#3824) ──────────────────────────────────────────
+
+class TestParsePrDict:
+    def test_parse_pr_dict_complete(self):
+        # A recent updatedAt so status stays APPROVED (a hardcoded date eventually
+        # crosses the staleness window and _classify returns STALE first).
+        recent = datetime.now(timezone.utc) - timedelta(days=1)
+        raw = {
+            "number": 42,
+            "title": "Add feature",
+            "headRefName": "feat-42",
+            "baseRefName": "v8",
+            "author": {"login": "alice"},
+            "isDraft": False,
+            "reviewDecision": "APPROVED",
+            "statusCheckRollup": [{"conclusion": "SUCCESS", "status": "COMPLETED"}],
+            "updatedAt": recent.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        pr = _parse_pr_dict(raw, expected_base="v8")
+        assert pr.number == 42
+        assert pr.title == "Add feature"
+        assert pr.branch == "feat-42"
+        assert pr.base_branch == "v8"
+        assert pr.author == "alice"
+        assert pr.is_draft is False
+        assert pr.review_decision == "APPROVED"
+        assert pr.ci_status == "SUCCESS"
+        assert pr.status == "APPROVED"
+        assert pr.updated_at.year == recent.year
+
+    def test_parse_pr_dict_defaults_on_missing_optional_fields(self):
+        raw = {
+            "number": 7,
+            "title": "Minimal PR",
+            "headRefName": "patch-1",
+            "baseRefName": "main",
+        }
+        pr = _parse_pr_dict(raw, expected_base="main")
+        assert pr.author == "?"
+        assert pr.is_draft is False
+        assert pr.review_decision == ""
+        assert pr.ci_status == "NONE"
+
+
+class TestFetchPr:
+    def test_fetch_pr_success(self):
+        raw = {
+            "number": 105,
+            "title": "Fix something",
+            "state": "OPEN",
+            "headRefName": "fix-105",
+            "baseRefName": "v8",
+            "author": {"login": "bob"},
+            "isDraft": False,
+            "reviewDecision": "",
+            "statusCheckRollup": [],
+            "updatedAt": "2026-09-24T12:00:00Z",
+        }
+        with patch("graphify.prs._gh", return_value=raw) as mock_gh:
+            pr = fetch_pr(105, base="v8")
+        assert pr is not None
+        assert pr.number == 105
+        assert pr.title == "Fix something"
+        args, _ = mock_gh.call_args
+        assert args[0:3] == ("pr", "view", "105")
+
+    def test_fetch_pr_with_repo(self):
+        with patch("graphify.prs._gh", return_value=None) as mock_gh:
+            fetch_pr(105, repo="owner/repo", base="v8")
+        args, _ = mock_gh.call_args
+        assert "--repo" in args
+        assert "owner/repo" in args
+
+    def test_fetch_pr_not_found_returns_none(self):
+        with patch("graphify.prs._gh", return_value=None):
+            pr = fetch_pr(999, base="v8")
+        assert pr is None
+
+    @pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
+    def test_fetch_pr_closed_or_merged_returns_none(self, state: str):
+        raw = {
+            "number": 105,
+            "title": "Old PR",
+            "state": state,
+            "headRefName": "feature",
+            "baseRefName": "v8",
+            "updatedAt": "2026-09-24T12:00:00Z",
+        }
+        with patch("graphify.prs._gh", return_value=raw):
+            pr = fetch_pr(105, base="v8")
+        assert pr is None
+
+
+# ── attach_graph_impact & include_wrong_base (#3824) ──────────────────────────
+
+class TestAttachGraphImpact:
+    def _sample_graph_data(self):
+        return {
+            "nodes": [
+                {"id": "n1", "source_file": "src/auth.py", "community": 0, "label": "auth"},
+                {"id": "n2", "source_file": "src/auth.py", "community": 0, "label": "login"},
+                {"id": "n3", "source_file": "src/api.py", "community": 1, "label": "api"},
+            ]
+        }
+
+    def test_attach_graph_impact_skips_wrong_base_by_default(self, tmp_path):
+        graph_file = tmp_path / "graph.json"
+        graph_file.write_text(json.dumps(self._sample_graph_data()), encoding="utf-8")
+
+        pr_ready = make_pr(number=1, base_branch="v8", expected_base="v8")
+        pr_wrong = make_pr(number=2, base_branch="develop", expected_base="v8")
+
+        with patch("graphify.prs.fetch_pr_files", return_value=["src/auth.py"]) as mock_files:
+            attach_graph_impact([pr_ready, pr_wrong], graph_file, include_wrong_base=False)
+
+        mock_files.assert_called_once_with(1, None)
+        assert pr_ready.nodes_affected == 2
+        assert pr_ready.communities_touched == [0]
+        assert pr_wrong.nodes_affected == 0
+        assert pr_wrong.communities_touched == []
+
+    def test_attach_graph_impact_includes_wrong_base_when_requested(self, tmp_path):
+        graph_file = tmp_path / "graph.json"
+        graph_file.write_text(json.dumps(self._sample_graph_data()), encoding="utf-8")
+
+        pr_wrong = make_pr(number=2, base_branch="develop", expected_base="v8")
+        assert pr_wrong.status == "WRONG-BASE"
+
+        with patch("graphify.prs.fetch_pr_files", return_value=["src/auth.py"]) as mock_files:
+            attach_graph_impact([pr_wrong], graph_file, include_wrong_base=True)
+
+        mock_files.assert_called_once_with(2, None)
+        assert pr_wrong.nodes_affected == 2
+        assert pr_wrong.communities_touched == [0]
+        assert pr_wrong.status == "WRONG-BASE"
+        assert pr_wrong.blast_radius == "2 nodes / 1 community"
+
+
+# ── cmd_prs single-PR detail mode (#3824) ─────────────────────────────────────
+
+class TestCmdPrsDetail:
+    def test_detail_only_fetches_diff_for_requested_pr(self, tmp_path, capsys):
+        graph_file = tmp_path / "graph.json"
+        graph_data = {
+            "nodes": [
+                {"id": "n1", "source_file": "src/app.py", "community": 0, "label": "app"},
+            ]
+        }
+        graph_file.write_text(json.dumps(graph_data), encoding="utf-8")
+
+        pr1 = make_pr(number=10, base_branch="v8", expected_base="v8")
+        pr2 = make_pr(number=20, base_branch="v8", expected_base="v8")
+        pr3 = make_pr(number=30, base_branch="v8", expected_base="v8")
+
+        with patch("graphify.prs.fetch_prs", return_value=[pr1, pr2, pr3]), \
+             patch("graphify.prs.fetch_worktrees", return_value={}), \
+             patch("graphify.prs.fetch_pr_files", return_value=["src/app.py"]) as mock_diff:
+            cmd_prs(["20", f"--graph={graph_file}"])
+
+        # Crucial check for #3824: only PR 20's diff must be fetched, NOT 10 or 30
+        assert mock_diff.call_count == 1
+        assert mock_diff.call_args[0][0] == 20
+        captured = capsys.readouterr()
+        assert "PR #20" in captured.out
+        assert "Graph impact:" in captured.out
+
+    def test_detail_calculates_impact_for_wrong_base_pr(self, tmp_path, capsys):
+        graph_file = tmp_path / "graph.json"
+        graph_data = {
+            "nodes": [
+                {"id": "n1", "source_file": "src/app.py", "community": 0, "label": "app"},
+            ]
+        }
+        graph_file.write_text(json.dumps(graph_data), encoding="utf-8")
+
+        pr_wrong = make_pr(number=42, base_branch="feature-x", expected_base="v8")
+        assert pr_wrong.status == "WRONG-BASE"
+
+        with patch("graphify.prs.fetch_prs", return_value=[pr_wrong]), \
+             patch("graphify.prs.fetch_worktrees", return_value={}), \
+             patch("graphify.prs.fetch_pr_files", return_value=["src/app.py"]) as mock_diff:
+            cmd_prs(["42", f"--graph={graph_file}"])
+
+        assert mock_diff.call_count == 1
+        assert mock_diff.call_args[0][0] == 42
+        captured = capsys.readouterr()
+        assert "PR #42" in captured.out
+        assert "WRONG-BASE" in captured.out
+        assert "Graph impact:" in captured.out
+
+    def test_detail_falls_back_to_fetch_pr_when_outside_first_50(self, tmp_path, capsys):
+        graph_file = tmp_path / "graph.json"
+        graph_data = {
+            "nodes": [
+                {"id": "n1", "source_file": "src/app.py", "community": 0, "label": "app"},
+            ]
+        }
+        graph_file.write_text(json.dumps(graph_data), encoding="utf-8")
+
+        # 50 PRs that do not include PR 99
+        prs_50 = [make_pr(number=i, base_branch="v8") for i in range(1, 51)]
+        pr_99 = make_pr(number=99, branch="feat-99", base_branch="v8", expected_base="v8")
+
+        with patch("graphify.prs.fetch_prs", return_value=prs_50), \
+             patch("graphify.prs._detect_default_branch", return_value="v8"), \
+             patch("graphify.prs.fetch_worktrees", return_value={"feat-99": "/path/to/wt"}), \
+             patch("graphify.prs.fetch_pr", return_value=pr_99) as mock_fetch_single, \
+             patch("graphify.prs.fetch_pr_files", return_value=["src/app.py"]):
+            cmd_prs(["99", f"--graph={graph_file}"])
+
+        mock_fetch_single.assert_called_once_with(99, repo=None, base="v8")
+        assert pr_99.worktree_path == "/path/to/wt"
+        captured = capsys.readouterr()
+        assert "PR #99" in captured.out
+        assert "worktree:" in captured.out
+        assert "/path/to/wt" in captured.out
+
+    def test_detail_exits_when_not_found_in_list_or_view(self, capsys):
+        prs_50 = [make_pr(number=i) for i in range(1, 51)]
+
+        with patch("graphify.prs.fetch_prs", return_value=prs_50), \
+             patch("graphify.prs.fetch_worktrees", return_value={}), \
+             patch("graphify.prs.fetch_pr", return_value=None):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_prs(["999"])
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "PR #999 not found in open PRs." in captured.err

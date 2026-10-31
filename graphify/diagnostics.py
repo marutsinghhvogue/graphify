@@ -11,7 +11,6 @@ from typing import Any
 
 import networkx as nx
 
-
 _SUPPRESSION_DECL_RE = re.compile(r"^\s*(?P<name>seen_[A-Za-z0-9_]+)\s*[:=]")
 _TYPE_TUPLE_RE = re.compile(r"set\[tuple\[(?P<inside>[^\]]+)\]\]")
 
@@ -161,12 +160,25 @@ def diagnose_extraction(
     max_examples: int = 5,
     extract_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Summarize same-endpoint edge-collapse risk for one JSON graph/extraction dict."""
+    """Summarize graph-integrity risks for one JSON graph/extraction dict.
+
+    Missing ``ref_*`` targets are expected external references produced for
+    dependencies outside the scanned corpus. They are counted separately from
+    actionable internal dangling endpoints.
+    """
     from graphify.build import build_from_json
 
     node_ids = _node_ids(extraction)
     raw_edges = _edge_list(extraction)
     canonical_edges = [_canonical_edge(edge) for edge in raw_edges]
+
+    # Code-typed semantic nodes the extractor could not verify against the source
+    # it read (#1949): likely-inferred (or hallucinated) symbols surfaced from a
+    # document. Count them so the flag on graph.json nodes is actually surfaced.
+    unverified_node_count = sum(
+        1 for n in extraction.get("nodes", [])
+        if isinstance(n, dict) and n.get("verification") == "unverified"
+    )
 
     exact_counts: Counter[str] = Counter(_exact_signature(edge) for edge in raw_edges)
     directed_pairs: Counter[tuple[str, str]] = Counter()
@@ -176,6 +188,7 @@ def diagnose_extraction(
     non_object_edges = 0
     missing_endpoint_edges = 0
     dangling_endpoint_edges = 0
+    external_reference_edges = 0
     self_loop_edges = 0
     valid_candidate_edges = 0
 
@@ -189,7 +202,15 @@ def diagnose_extraction(
             missing_endpoint_edges += 1
             continue
         if source not in node_ids or target not in node_ids:
-            dangling_endpoint_edges += 1
+            # Two intentionally-distinct populations of "external": a `ref_`
+            # target here is a JSON/config out-of-corpus reference ($ref /
+            # extends / references), whereas import-family externals are minted
+            # as declared `external=True` stub nodes at build time (#2873) and
+            # therefore never reach this branch. Don't try to unify them.
+            if source in node_ids and target.startswith("ref_"):
+                external_reference_edges += 1
+            else:
+                dangling_endpoint_edges += 1
             continue
         if source == target:
             self_loop_edges += 1
@@ -239,10 +260,12 @@ def diagnose_extraction(
 
     return {
         "node_count": len(node_ids),
+        "unverified_node_count": unverified_node_count,
         "raw_edge_count": len(raw_edges),
         "non_object_edges": non_object_edges,
         "missing_endpoint_edges": missing_endpoint_edges,
         "dangling_endpoint_edges": dangling_endpoint_edges,
+        "external_reference_edges": external_reference_edges,
         "self_loop_edges": self_loop_edges,
         "valid_candidate_edges": valid_candidate_edges,
         "exact_duplicate_edges": _count_extra(exact_counts),
@@ -274,7 +297,13 @@ def _read_json_file(path: str | Path) -> dict[str, Any]:
 
     json_path = Path(path)
     check_graph_file_size_cap(json_path)
-    data = json.loads(json_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(
+            f"Cannot parse {json_path}: {exc}. "
+            "The file may be corrupted — re-run 'graphify extract'."
+        ) from exc
     if not isinstance(data, dict):
         raise ValueError("diagnostic input must be a JSON object")
     return data
@@ -338,10 +367,12 @@ def format_diagnostic_report(summary: dict[str, Any]) -> str:
         "input_stage: provided JSON (normal graph.json is post-build)",
         f"effective_directed: {summary.get('effective_directed', '<direct-call>')}",
         f"nodes: {summary['node_count']}",
+        f"unverified_code_nodes: {summary.get('unverified_node_count', 0)}",
         f"raw_edges: {summary['raw_edge_count']}",
         f"valid_candidate_edges: {summary['valid_candidate_edges']}",
         f"missing_endpoint_edges: {summary['missing_endpoint_edges']}",
         f"dangling_endpoint_edges: {summary['dangling_endpoint_edges']}",
+        f"external_reference_edges: {summary.get('external_reference_edges', 0)}",
         f"self_loop_edges: {summary['self_loop_edges']}",
         f"exact_duplicate_edges: {summary['exact_duplicate_edges']}",
         f"directed_unique_endpoint_pairs: {summary['directed_unique_endpoint_pairs']}",

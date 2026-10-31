@@ -10,13 +10,13 @@ section, run the installer, and assert that the on-disk file now contains
 the new query-first wording and does not contain the old report-first text.
 """
 from __future__ import annotations
+
 import json
 from pathlib import Path
 
 import pytest
 
 import graphify.__main__ as mainmod
-
 
 # A representative slice of the pre-fix text. Each platform's old install
 # wrote a variant of "ALWAYS read graphify-out/GRAPH_REPORT.md before ...".
@@ -145,9 +145,14 @@ def test_claude_install_upgrades_stale_hook_payload(tmp_path, monkeypatch):
     assert _OLD_HOOK_PAYLOAD_SNIPPET not in new_settings_text, (
         "stale hook payload survived upgrade"
     )
-    assert "graphify query" in new_settings_text, (
-        "new hook payload should route to `graphify query`"
+    # Since #522 the nudge text lives in the `graphify hook-guard` subcommand, not
+    # inline in settings.json (so the command parses on Windows). The upgraded hook
+    # must therefore route to that shell-agnostic subcommand, and the old bash
+    # pipeline must be gone.
+    assert "hook-guard" in new_settings_text, (
+        "new hook payload should route to the `graphify hook-guard` subcommand"
     )
+    assert "case x in" not in new_settings_text, "stale bash pipeline survived upgrade"
 
 
 def test_agents_install_upgrades_stale_section(tmp_path, monkeypatch):
