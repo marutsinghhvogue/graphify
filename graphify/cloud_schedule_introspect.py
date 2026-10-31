@@ -69,7 +69,7 @@ def _schedule_node(sid: str, expr: str, provider: str, trigger: str,
 def _triggers_edge(sid: str, target: str, provider: str, path: str, line: int) -> dict:
     return {
         "source": sid, "target": target, "relation": "triggers",
-        "confidence": "INFERRED", "confidence_score": 0.7,
+        "confidence": "INFERRED", "confidence_score": 0.75,
         "source_file": path, "source_location": f"L{line}", "context": "cloud_schedule",
         "metadata": {"provider": provider, "target_hint": target},
     }

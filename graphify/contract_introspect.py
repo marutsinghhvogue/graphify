@@ -353,7 +353,7 @@ def cross_service_graph(root: str | Path) -> dict[str, Any]:
             edges.append({
                 "source": cid, "target": hid, "relation": "calls_service",
                 "confidence": "AMBIGUOUS" if ambiguous else "INFERRED",
-                "confidence_score": 0.95 if named else 0.5 if ambiguous else 0.9,
+                "confidence_score": 0.95 if named else 0.2 if ambiguous else 0.85,
                 "source_file": c.source_file, "source_location": f"L{c.line}",
                 "context": "cross_service",
                 "metadata": {"method": c.method, "path": c.path,

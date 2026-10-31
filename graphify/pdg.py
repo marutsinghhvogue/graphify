@@ -262,7 +262,7 @@ def _analyze_function(fn, src: bytes, path: str, findings_ns: str) -> tuple[list
             if d and d != s.id:
                 edges.append({
                     "source": d, "target": s.id, "relation": "data_dep",
-                    "confidence": "INFERRED", "confidence_score": 0.7,
+                    "confidence": "INFERRED", "confidence_score": 0.75,
                     "source_file": path, "source_location": f"L{s.line}",
                     "context": "pdg", "metadata": {"var": u},
                 })

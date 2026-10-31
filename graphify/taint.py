@@ -177,7 +177,7 @@ def analyze_taint(pdg_result: dict[str, Any], rules: list[TaintRule]) -> dict[st
         ))
         edges.append({
             "source": t["origin"], "target": s.id, "relation": "flows_to",
-            "confidence": "INFERRED", "confidence_score": 0.8, "context": "taint",
+            "confidence": "INFERRED", "confidence_score": 0.85, "context": "taint",
             "metadata": {"vuln": sink_rules[0].vuln, "category": t["category"]},
         })
     return {"findings": findings, "edges": edges}
@@ -376,7 +376,7 @@ def _findings_edges(findings: list[Finding]) -> list[dict]:
     for f in findings:
         out.append({
             "source": f.source["stmt_id"], "target": f.sink["stmt_id"], "relation": "flows_to",
-            "confidence": f.confidence, "confidence_score": 0.8, "context": "taint",
+            "confidence": f.confidence, "confidence_score": 0.85, "context": "taint",
             "source_file": f.source.get("file"),
             "source_location": f"L{f.source.get('line', 0)}",
             "metadata": {

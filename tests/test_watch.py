@@ -47,6 +47,14 @@ def test_watched_extensions_includes_code():
     assert ".go" in _WATCHED_EXTENSIONS
     assert ".rs" in _WATCHED_EXTENSIONS
 
+def test_verilog_header_triggers_code_rebuild_without_llm(tmp_path):
+    header = tmp_path / "defs.vh"
+    header.write_text("`define WIDTH 8\n", encoding="utf-8")
+
+    assert ".vh" in _WATCHED_EXTENSIONS
+    assert _batch_triggers_rebuild([header]) is True
+    assert _batch_needs_llm_flag([header]) is False
+
 def test_watched_extensions_includes_docs():
     assert ".md" in _WATCHED_EXTENSIONS
     assert ".txt" in _WATCHED_EXTENSIONS
@@ -799,6 +807,7 @@ def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot delete the current working directory")
 def test_rebuild_code_deleted_cwd_without_repo_root_returns_false(tmp_path, monkeypatch, capsys):
     """Detached hooks can inherit a CWD that no longer exists.
 
@@ -823,6 +832,7 @@ def test_rebuild_code_deleted_cwd_without_repo_root_returns_false(tmp_path, monk
     assert "current working directory no longer exists" in out
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot delete the current working directory")
 def test_rebuild_code_deleted_cwd_uses_graphify_repo_root(tmp_path, monkeypatch):
     """GRAPHIFY_REPO_ROOT lets detached hook rebuilds recover from a deleted CWD."""
     from graphify.watch import _rebuild_code
@@ -1299,6 +1309,55 @@ def test_rebuild_lock_non_blocking_does_not_clobber_holder(tmp_path):
             assert inner is False
             # Holder's PID line must still be intact.
             assert lock_path.read_text(encoding="utf-8") == held_contents
+
+
+def _rebuild_lock_holder_for_test(out_dir, name, hold, q):
+    """Module-level so `spawn`-mode multiprocessing can pickle it (#4273)."""
+    with _rebuild_lock(out_dir, blocking=True):
+        q.put((name, "enter", time.monotonic()))
+        time.sleep(hold)
+        q.put((name, "exit", time.monotonic()))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="#4273 is a POSIX flock/unlink race")
+def test_rebuild_lock_unlink_does_not_let_a_third_caller_in_while_a_waiter_holds(tmp_path):
+    """#4273: flock() locks the open file's inode, not the path. Unlinking the
+    path on release used to let a blocked waiter end up holding the lock on
+    an orphaned inode while a later caller opened the (recreated) path fresh
+    and acquired an unrelated, never-locked inode immediately — two holders
+    inside the critical section at once.
+
+    A (held briefly) -> B (blocked waiter, acquires once A releases) -> C
+    (arrives after A releases, while B is still holding). C must never enter
+    while B is still inside.
+    """
+    import multiprocessing as mp
+
+    out = tmp_path / "graphify-out"
+    holder = _rebuild_lock_holder_for_test
+    q = mp.Queue()
+    a = mp.Process(target=holder, args=(out, "A", 0.4, q))
+    a.start()
+    time.sleep(0.15)
+    b = mp.Process(target=holder, args=(out, "B", 0.6, q))  # parks in flock() on the old inode
+    b.start()
+    a.join()
+    time.sleep(0.15)  # A has released; B should now hold the lock on a fresh inode
+    c = mp.Process(target=holder, args=(out, "C", 0.2, q))  # must NOT get in until B exits
+    c.start()
+    b.join()
+    c.join()
+
+    events = sorted((q.get() for _ in range(6)), key=lambda e: e[2])
+    intervals = {}
+    for name, kind, t in events:
+        intervals.setdefault(name, {})[kind] = t
+
+    b_enter, b_exit = intervals["B"]["enter"], intervals["B"]["exit"]
+    c_enter = intervals["C"]["enter"]
+    assert not (b_enter < c_enter < b_exit), (
+        f"C entered at {c_enter} while B held the lock ({b_enter}..{b_exit}): {events}"
+    )
 
 
 def test_rebuild_lock_blocks_concurrent_process(tmp_path):
@@ -4991,3 +5050,102 @@ def test_requires_symlinks_rebuild_symlink_worker(requires_symlinks, tmp_path, c
     data = json.loads(graph_path.read_text(encoding="utf-8"))
     labels = {n.get("label") for n in data["nodes"]}
     assert "run_worker()" in labels
+
+
+def test_rebuild_code_sidecar_writes_are_atomic_and_labels_first(tmp_path, monkeypatch):
+    """A rebuild interrupted between the labels and signature writes must not
+    leave stale labels that look verified.
+
+    The staleness guard compares the SAVED signatures against ones recomputed
+    from the current clustering — not against the labels. So publishing the
+    signatures first and crashing leaves a sidecar already describing the new
+    clustering beside the old labels: the guard recomputes the same signatures,
+    finds them equal, and silently keeps names for a clustering that no longer
+    exists. Labels must land first, so the sidecar trails and the guard sees a
+    mismatch it can re-label. Each write is also atomic, so a kill mid-write
+    can never publish a half-written sidecar.
+    """
+    import json
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.py").write_text(
+        "def alpha():\n    return beta()\n\ndef beta():\n    return 1\n", encoding="utf-8"
+    )
+    assert _rebuild_code(corpus, acquire_lock=False) is True
+
+    out = corpus / "graphify-out"
+    labels_file = out / ".graphify_labels.json"
+    sig_file = out / ".graphify_labels.json.sig"
+
+    # Record the order in which the sidecars are published, and prove each one
+    # is published atomically (rename into place) rather than truncate-in-place.
+    order: "list[str]" = []
+    import os
+    from pathlib import Path
+
+    def _label(name: str) -> "str | None":
+        if name.endswith(".graphify_labels.json.sig"):
+            return "sig"
+        if name.endswith(".graphify_labels.json"):
+            return "labels"
+        return None
+
+    real_replace = os.replace
+    real_write_text = Path.write_text
+    real_open = __builtins__["open"] if isinstance(__builtins__, dict) else __builtins__.open
+
+    def _tracking_replace(src, dst, *a, **kw):
+        tag = _label(str(dst))
+        if tag:
+            order.append(tag)
+        return real_replace(src, dst, *a, **kw)
+
+    def _tracking_write_text(self, *a, **kw):
+        tag = _label(str(self))
+        if tag:
+            # Recorded as non-atomic: the sidecar is truncated in place.
+            order.append(tag + ":non-atomic")
+        return real_write_text(self, *a, **kw)
+
+    def _tracking_open(file, mode="r", *a, **kw):
+        # A writing open() straight onto a sidecar path is non-atomic; the
+        # atomic helper opens a temp file and renames it, so it never trips this.
+        # `backup_if_protected` copies the sidecars into a dated backup folder
+        # before the rebuild advances them — that is a copy of the OLD file, not
+        # a publish of the new one, so only the live out/ paths are tracked.
+        if any(m in str(mode) for m in ("w", "a", "+")):
+            path = Path(file)
+            if path.parent == out and _label(path.name):
+                order.append(_label(path.name) + ":non-atomic")
+        return real_open(file, mode, *a, **kw)
+
+    monkeypatch.setattr(os, "replace", _tracking_replace)
+    monkeypatch.setattr(Path, "write_text", _tracking_write_text)
+    monkeypatch.setattr("builtins.open", _tracking_open)
+
+    # Grow the corpus so clustering changes and the sidecars are rewritten.
+    for name in ("b.py", "c.py", "d.py"):
+        (corpus / name).write_text(
+            f"def {name[0]}_one():\n    return {name[0]}_two()\n\n"
+            f"def {name[0]}_two():\n    return 2\n",
+            encoding="utf-8",
+        )
+    assert _rebuild_code(corpus, acquire_lock=False) is True
+
+    assert not [o for o in order if o.endswith(":non-atomic")], (
+        f"sidecars must be published atomically (temp + rename), saw {order}"
+    )
+    assert "sig" in order and "labels" in order, (
+        f"expected both sidecars to be rewritten, saw {order}"
+    )
+    assert order.index("labels") < order.index("sig"), (
+        "labels must be written BEFORE the signature sidecar: signatures first "
+        "would let a crash leave a matching sidecar beside stale labels, which "
+        f"the staleness guard cannot detect; saw {order}"
+    )
+
+    # Both sidecars must be parseable — a torn write would fail here.
+    assert json.loads(sig_file.read_text(encoding="utf-8")) is not None
+    assert json.loads(labels_file.read_text(encoding="utf-8")) is not None
