@@ -1,0 +1,23 @@
+{
+  "piggymetrics": {
+    "url": "https://github.com/sqshq/piggymetrics.git",
+    "sha": "6bb2cf9ddbca980b664d3edbb6ff775d75369278",
+    "root": ".",
+    "transport": "http",
+    "frameworks": "Spring Boot, Feign (@FeignClient), Spring @Scheduled; context paths set in config-server YAML"
+  },
+  "spring-petclinic-microservices": {
+    "url": "https://github.com/spring-petclinic/spring-petclinic-microservices.git",
+    "sha": "e8b747ab522721076cacb5cf688eb8a54ba8c5c9",
+    "root": ".",
+    "transport": "http",
+    "frameworks": "Spring Boot, reactive WebClient, RestClient, Spring Cloud Gateway"
+  },
+  "microservices-demo": {
+    "url": "https://github.com/GoogleCloudPlatform/microservices-demo.git",
+    "sha": "c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712",
+    "root": "src",
+    "transport": "grpc",
+    "frameworks": "gRPC across Go, Python, C# (a known gap for the fork's HTTP-only contract layer)"
+  }
+}

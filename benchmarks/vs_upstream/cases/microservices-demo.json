@@ -1,0 +1,44 @@
+[
+  {
+    "id": "md-1",
+    "file": "shippingservice/main.go",
+    "symbol": "ShipOrder",
+    "endpoint": "rpc ShippingService.ShipOrder",
+    "expected": ["checkoutservice"],
+    "evidence": ["checkoutservice/main.go:387 pb.NewShippingServiceClient(...).ShipOrder"],
+    "notes": "gRPC: the only link is the generated stub, which neither tool models as a cross-service edge yet."
+  },
+  {
+    "id": "md-2",
+    "file": "shippingservice/main.go",
+    "symbol": "GetQuote",
+    "endpoint": "rpc ShippingService.GetQuote",
+    "expected": ["checkoutservice", "frontend"],
+    "evidence": [
+      "checkoutservice/main.go:315 GetQuote(ctx, &pb.GetQuoteRequest{...})",
+      "frontend/rpc.go:88 pb.NewShippingServiceClient(...).GetQuote"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "md-3",
+    "file": "emailservice/email_server.py",
+    "symbol": "SendOrderConfirmation",
+    "endpoint": "rpc EmailService.SendOrderConfirmation",
+    "expected": ["checkoutservice"],
+    "evidence": ["checkoutservice/main.go:380 pb.NewEmailServiceClient(...).SendOrderConfirmation"],
+    "notes": "Python server, Go client. The file defines two servicer classes; the seed is both."
+  },
+  {
+    "id": "md-4",
+    "file": "cartservice/src/services/CartService.cs",
+    "symbol": "GetCart",
+    "endpoint": "rpc CartService.GetCart",
+    "expected": ["checkoutservice", "frontend"],
+    "evidence": [
+      "checkoutservice/main.go:325 pb.NewCartServiceClient(...).GetCart",
+      "frontend/rpc.go:58 pb.NewCartServiceClient(...).GetCart"
+    ],
+    "notes": "C# server, Go clients."
+  }
+]

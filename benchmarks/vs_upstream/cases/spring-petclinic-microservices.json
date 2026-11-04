@@ -1,0 +1,86 @@
+[
+  {
+    "id": "pc-1",
+    "file": "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java",
+    "symbol": "findOwner",
+    "endpoint": "GET /owners/{ownerId}",
+    "expected": ["spring-petclinic-api-gateway"],
+    "evidence": [
+      "spring-petclinic-api-gateway/.../api/application/CustomersServiceClient.java:37 WebClient GET http://customers-service/owners/{ownerId}"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "pc-2",
+    "file": "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java",
+    "symbol": "findAll",
+    "endpoint": "GET /owners",
+    "expected": ["spring-petclinic-genai-service"],
+    "evidence": [
+      "spring-petclinic-genai-service/.../genai/AIDataProvider.java getAllOwners: RestClient GET getCustomerServiceUri() + \"/owners\""
+    ],
+    "notes": "Host comes from service discovery at runtime; only the path is a literal."
+  },
+  {
+    "id": "pc-3",
+    "file": "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java",
+    "symbol": "createOwner",
+    "endpoint": "POST /owners",
+    "expected": ["spring-petclinic-genai-service"],
+    "evidence": [
+      "spring-petclinic-genai-service/.../genai/AIDataProvider.java addOwnerToPetclinic: RestClient POST getCustomerServiceUri() + \"/owners\""
+    ],
+    "notes": ""
+  },
+  {
+    "id": "pc-4",
+    "file": "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java",
+    "symbol": "processCreationForm",
+    "endpoint": "POST /owners/{ownerId}/pets",
+    "expected": ["spring-petclinic-genai-service"],
+    "evidence": [
+      "spring-petclinic-genai-service/.../genai/AIDataProvider.java addPetToOwner: RestClient POST getCustomerServiceUri() + \"/owners/\" + ownerId + \"/pets\""
+    ],
+    "notes": "Path is built by string concatenation around a variable."
+  },
+  {
+    "id": "pc-5",
+    "file": "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java",
+    "symbol": "read",
+    "endpoint": "GET /pets/visits",
+    "expected": ["spring-petclinic-api-gateway"],
+    "evidence": [
+      "spring-petclinic-api-gateway/.../api/application/VisitsServiceClient.java:45 WebClient GET hostname + \"pets/visits?petId={petId}\""
+    ],
+    "notes": "VisitResource has two `read` overloads; the seed is both (the other, GET owners/*/pets/{petId}/visits, has no service consumer)."
+  },
+  {
+    "id": "pc-6",
+    "file": "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java",
+    "symbol": "showResourcesVetList",
+    "endpoint": "GET /vets",
+    "expected": ["spring-petclinic-genai-service"],
+    "evidence": [
+      "spring-petclinic-genai-service/.../genai/VectorStoreController.java:66-69 WebClient GET \"http://vets-service/\" + \"vets\""
+    ],
+    "notes": "Also routed by the gateway's YAML (/api/vet/**); routes are not scored."
+  },
+  {
+    "id": "pc-neg-1",
+    "file": "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java",
+    "symbol": "updateOwner",
+    "endpoint": "PUT /owners/{ownerId}",
+    "expected": [],
+    "evidence": [],
+    "notes": "Negative control: reached only by the browser UI through the gateway route."
+  },
+  {
+    "id": "pc-neg-2",
+    "file": "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java",
+    "symbol": "create",
+    "endpoint": "POST /owners/*/pets/{petId}/visits",
+    "expected": [],
+    "evidence": [],
+    "notes": "Negative control: reached only by the browser UI through the gateway route."
+  }
+]

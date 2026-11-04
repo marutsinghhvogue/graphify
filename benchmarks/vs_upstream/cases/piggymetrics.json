@@ -1,0 +1,56 @@
+[
+  {
+    "id": "pm-1",
+    "file": "account-service/src/main/java/com/piggymetrics/account/controller/AccountController.java",
+    "symbol": "getAccountByName",
+    "endpoint": "GET /accounts/{name}",
+    "expected": ["notification-service"],
+    "evidence": [
+      "notification-service/src/main/java/com/piggymetrics/notification/client/AccountServiceClient.java:12 @FeignClient(name=\"account-service\") GET /accounts/{accountName}",
+      "called from the @Scheduled jobs in notification-service/.../NotificationServiceImpl.java"
+    ],
+    "notes": "Controller declares only /{name}; the /accounts prefix is server.servlet.context-path in config/src/main/resources/shared/account-service.yml."
+  },
+  {
+    "id": "pm-2",
+    "file": "statistics-service/src/main/java/com/piggymetrics/statistics/controller/StatisticsController.java",
+    "symbol": "saveAccountStatistics",
+    "endpoint": "PUT /statistics/{accountName}",
+    "expected": ["account-service"],
+    "evidence": [
+      "account-service/src/main/java/com/piggymetrics/account/client/StatisticsServiceClient.java:13 @FeignClient(name=\"statistics-service\") PUT /statistics/{accountName}",
+      "called at account-service/.../AccountServiceImpl.java:90"
+    ],
+    "notes": "/statistics prefix comes from context-path in config-server YAML."
+  },
+  {
+    "id": "pm-3",
+    "file": "auth-service/src/main/java/com/piggymetrics/auth/controller/UserController.java",
+    "symbol": "createUser",
+    "endpoint": "POST /uaa/users",
+    "expected": ["account-service"],
+    "evidence": [
+      "account-service/src/main/java/com/piggymetrics/account/client/AuthServiceClient.java:12 @FeignClient(name=\"auth-service\") POST /uaa/users",
+      "called at account-service/.../AccountServiceImpl.java:51"
+    ],
+    "notes": "/uaa prefix comes from context-path; /users from the class-level @RequestMapping."
+  },
+  {
+    "id": "pm-neg-1",
+    "file": "statistics-service/src/main/java/com/piggymetrics/statistics/controller/StatisticsController.java",
+    "symbol": "getCurrentAccountStatistics",
+    "endpoint": "GET /statistics/current",
+    "expected": [],
+    "evidence": [],
+    "notes": "Negative control: no other service calls it in code (only the browser UI through the gateway)."
+  },
+  {
+    "id": "pm-neg-2",
+    "file": "notification-service/src/main/java/com/piggymetrics/notification/controller/RecipientController.java",
+    "symbol": "getCurrentNotificationsSettings",
+    "endpoint": "GET /notifications/recipients/current",
+    "expected": [],
+    "evidence": [],
+    "notes": "Negative control: only the browser UI (gateway static JS) calls it; no service-to-service consumer."
+  }
+]

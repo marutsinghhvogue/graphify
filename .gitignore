@@ -52,3 +52,6 @@ deploy/.railway-secret
 # .csproj files on open
 tests/fixtures/**/obj/
 tests/fixtures/**/bin/
+
+# vs-upstream benchmark: cloned estates, upstream worktree, graphs, results
+benchmarks/vs_upstream/.cache/
