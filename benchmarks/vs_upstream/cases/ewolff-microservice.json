@@ -1,0 +1,46 @@
+[
+  {
+    "id": "ew-1",
+    "file": "microservice-demo-catalog/src/main/java/com/ewolff/microservice/catalog/ItemRepository.java",
+    "symbol": "ItemRepository",
+    "endpoint": "Spring Data REST /catalog",
+    "expected": [
+      "microservice-demo-order"
+    ],
+    "evidence": [
+      "microservice-demo-order/src/main/java/com/ewolff/microservice/order/clients/CatalogClient.java:86,112 restTemplate.getForObject(catalogURL() [+ itemId]); catalogURL() = String.format(\"http://%s:%s/catalog/\", ...)"
+    ],
+    "notes": "Producer is a @RepositoryRestResource(path=\"catalog\") repository, not a controller."
+  },
+  {
+    "id": "ew-2",
+    "file": "microservice-demo-customer/src/main/java/com/ewolff/microservice/customer/CustomerRepository.java",
+    "symbol": "CustomerRepository",
+    "endpoint": "Spring Data REST /customer",
+    "expected": [
+      "microservice-demo-order"
+    ],
+    "evidence": [
+      "microservice-demo-order/src/main/java/com/ewolff/microservice/order/clients/CustomerClient.java:61,88,107 getForEntity/getForObject(customerURL() ...); customerURL() = String.format(\"http://%s:%s/customer/\", ...)"
+    ],
+    "notes": "Producer is a @RepositoryRestResource(path=\"customer\") repository."
+  },
+  {
+    "id": "ew-neg-1",
+    "file": "microservice-demo-catalog/src/main/java/com/ewolff/microservice/catalog/web/CatalogController.java",
+    "symbol": "ItemList",
+    "endpoint": "GET /list.html",
+    "expected": [],
+    "evidence": [],
+    "notes": "HTML UI page; no service caller."
+  },
+  {
+    "id": "ew-neg-2",
+    "file": "microservice-demo-customer/src/main/java/com/ewolff/microservice/customer/web/CustomerController.java",
+    "symbol": "customerList",
+    "endpoint": "GET /list.html",
+    "expected": [],
+    "evidence": [],
+    "notes": "HTML UI page; no service caller."
+  }
+]

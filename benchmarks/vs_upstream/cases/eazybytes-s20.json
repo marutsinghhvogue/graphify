@@ -1,0 +1,55 @@
+[
+  {
+    "id": "eb-1",
+    "file": "cards/src/main/java/com/eazybytes/cards/controller/CardsController.java",
+    "symbol": "fetchCardDetails",
+    "endpoint": "GET /api/fetch",
+    "expected": [
+      "accounts"
+    ],
+    "evidence": [
+      "accounts/src/main/java/com/eazybytes/accounts/service/client/CardsFeignClient.java:10,13 @FeignClient(name=\"cards\") GET /api/fetch"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "eb-2",
+    "file": "loans/src/main/java/com/eazybytes/loans/controller/LoansController.java",
+    "symbol": "fetchLoanDetails",
+    "endpoint": "GET /api/fetch",
+    "expected": [
+      "accounts"
+    ],
+    "evidence": [
+      "accounts/src/main/java/com/eazybytes/accounts/service/client/LoansFeignClient.java:10,13 @FeignClient(name=\"loans\") GET /api/fetch"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "eb-neg-1",
+    "file": "cards/src/main/java/com/eazybytes/cards/controller/CardsController.java",
+    "symbol": "createCard",
+    "endpoint": "POST /api/create",
+    "expected": [],
+    "evidence": [],
+    "notes": "No service caller."
+  },
+  {
+    "id": "eb-neg-2",
+    "file": "accounts/src/main/java/com/eazybytes/accounts/controller/AccountsController.java",
+    "symbol": "fetchAccountDetails",
+    "endpoint": "GET /api/fetch",
+    "expected": [],
+    "evidence": [],
+    "notes": "Precision trap: same path as the cards/loans endpoints the Feign clients call, but nothing calls accounts' own /api/fetch."
+  },
+  {
+    "id": "eb-neg-3",
+    "file": "loans/src/main/java/com/eazybytes/loans/controller/LoansController.java",
+    "symbol": "getContactInfo",
+    "endpoint": "GET /api/contact-info",
+    "expected": [],
+    "evidence": [],
+    "notes": "Same path exists in all three services; no service caller."
+  }
+]

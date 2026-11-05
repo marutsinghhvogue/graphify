@@ -156,6 +156,7 @@ def _pct(x: float | None) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--estates", default=None, help="comma list (default: all in estates.json)")
+    ap.add_argument("--split", default=None, help="only estates in this split (dev | heldout)")
     ap.add_argument("--tools", default=",".join(TOOLS))
     ap.add_argument("--depths", default="2,4,6")
     ap.add_argument("--upstream-ref", default="upstream/v8")
@@ -165,13 +166,15 @@ def main() -> int:
 
     estates = json.loads((HERE / "estates.json").read_text(encoding="utf-8"))
     names = args.estates.split(",") if args.estates else list(estates)
+    if args.split:
+        names = [n for n in names if estates[n].get("split", "dev") == args.split]
     tools = args.tools.split(",")
     depths = [int(d) for d in args.depths.split(",")]
     upstream_src, upstream_sha = ensure_upstream(args.upstream_ref)
     fork_sha = _git("rev-parse", "HEAD", cwd=REPO)
     srcs = {"upstream": upstream_src, "fork": REPO}
 
-    # scores[transport][tool][depth]
+    # scores["<split> · <transport>"][tool][depth]; held-out estates never blend with dev
     scores: dict[str, dict[str, dict[int, Score]]] = {}
     raw: dict = {"upstream_sha": upstream_sha, "fork_sha": fork_sha, "estates": {}}
     for name in names:
@@ -186,14 +189,15 @@ def main() -> int:
             impact = run_impact(src, graph, cases_path, depths)
             raw["estates"][name][tool] = {"extract_seconds": secs, "impact": impact}
             for d in depths:
-                s = scores.setdefault(spec["transport"], {}).setdefault(tool, {}).setdefault(d, Score())
+                group = f'{spec.get("split", "dev")} · {spec["transport"]}'
+                s = scores.setdefault(group, {}).setdefault(tool, {}).setdefault(d, Score())
                 score(cases, impact, d, s)
             print(f"  {name:<32} {tool:<9} done" + (f" (extract {secs:.1f}s)" if secs else " (cached graph)"),
                   file=sys.stderr)
 
     print(f"\nupstream {upstream_sha[:10]}  vs  fork {fork_sha[:10]}\n")
-    for transport, by_tool in scores.items():
-        print(f"## {transport.upper()} estates\n")
+    for group, by_tool in scores.items():
+        print(f"## {group.upper()} estates\n")
         print("| tool | depth | recall | precision | exact cases | FP on negative controls | seeds not found |")
         print("|---|---|---|---|---|---|---|")
         for tool in tools:
@@ -206,12 +210,12 @@ def main() -> int:
     print(f"## Per case (depth {deepest}): TP / FP / FN other-services\n")
     print("| case | " + " | ".join(tools) + " |")
     print("|---|" + "---|" * len(tools))
-    for transport_scores in scores.values():
-        case_ids = [r[0] for r in transport_scores[tools[0]][deepest].rows]
+    for group_scores in scores.values():
+        case_ids = [r[0] for r in group_scores[tools[0]][deepest].rows]
         for i, cid in enumerate(case_ids):
             cells = []
             for tool in tools:
-                _, tp, fp, fn, nseeds = transport_scores[tool][deepest].rows[i]
+                _, tp, fp, fn, nseeds = group_scores[tool][deepest].rows[i]
                 cell = f"✓{len(tp)} ✗{len(fp)} miss{len(fn)}"
                 if not nseeds:
                     cell += " (no seed)"

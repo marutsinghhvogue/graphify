@@ -1,0 +1,43 @@
+[
+  {
+    "id": "i28-1",
+    "file": "currency-exchange-service/src/main/java/com/in28minutes/microservices/currencyexchangeservice/CurrencyExchangeController.java",
+    "symbol": "retrieveExchangeValue",
+    "endpoint": "GET /currency-exchange/from/{from}/to/{to}",
+    "expected": [
+      "currency-conversion-service"
+    ],
+    "evidence": [
+      "currency-conversion-service/src/main/java/com/in28minutes/microservices/currencyconversionservice/CurrencyConversionController.java:66 RestClient .uri(\"http://localhost:8000/currency-exchange/from/{from}/to/{to}\")",
+      "currency-conversion-service/src/main/java/com/in28minutes/microservices/currencyconversionservice/CurrencyExchangeProxy.java:9 @FeignClient(name=\"currency-exchange\") GET /currency-exchange/from/{from}/to/{to}"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "i28-neg-1",
+    "file": "limits-service/src/main/java/com/in28minutes/microservices/limitsservice/controller/LimitsController.java",
+    "symbol": "retrieveLimits",
+    "endpoint": "GET /limits",
+    "expected": [],
+    "evidence": [],
+    "notes": "No caller in any service."
+  },
+  {
+    "id": "i28-neg-2",
+    "file": "currency-exchange-service/src/main/java/com/in28minutes/microservices/currencyexchangeservice/CircuitBreakerController.java",
+    "symbol": "sampleApi",
+    "endpoint": "GET /sample-api",
+    "expected": [],
+    "evidence": [],
+    "notes": "No caller in any service."
+  },
+  {
+    "id": "i28-neg-3",
+    "file": "currency-conversion-service/src/main/java/com/in28minutes/microservices/currencyconversionservice/CurrencyConversionController.java",
+    "symbol": "calculateCurrencyConversion",
+    "endpoint": "GET /currency-conversion/from/{from}/to/{to}/quantity/{quantity}",
+    "expected": [],
+    "evidence": [],
+    "notes": "Reached only through the api-gateway route (lb://currency-conversion); routes are not scored."
+  }
+]

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "bs-1",
+    "file": "catalog-service/src/main/java/com/sivalabs/bookstore/catalog/web/controllers/ProductController.java",
+    "symbol": "getProductByCode",
+    "endpoint": "GET /api/products/{code}",
+    "expected": [
+      "order-service",
+      "bookstore-webapp"
+    ],
+    "evidence": [
+      "order-service/src/main/java/com/sivalabs/bookstore/orders/clients/catalog/ProductServiceClient.java:26 restClient.get().uri(\"/api/products/{code}\") (baseUrl orders.catalog-service-url)",
+      "bookstore-webapp/src/main/java/com/sivalabs/bookstore/webapp/clients/catalog/CatalogServiceClient.java:13 @GetExchange(\"/catalog/api/products/{code}\") via api-gateway, which strips /catalog"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "bs-2",
+    "file": "catalog-service/src/main/java/com/sivalabs/bookstore/catalog/web/controllers/ProductController.java",
+    "symbol": "getProducts",
+    "endpoint": "GET /api/products",
+    "expected": [
+      "bookstore-webapp"
+    ],
+    "evidence": [
+      "bookstore-webapp/.../clients/catalog/CatalogServiceClient.java:10 @GetExchange(\"/catalog/api/products\") via api-gateway"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "bs-3",
+    "file": "order-service/src/main/java/com/sivalabs/bookstore/orders/web/controllers/OrderController.java",
+    "symbol": "createOrder",
+    "endpoint": "POST /api/orders",
+    "expected": [
+      "bookstore-webapp"
+    ],
+    "evidence": [
+      "bookstore-webapp/.../clients/orders/OrderServiceClient.java:12 @PostExchange(\"/orders/api/orders\") via api-gateway"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "bs-4",
+    "file": "order-service/src/main/java/com/sivalabs/bookstore/orders/web/controllers/OrderController.java",
+    "symbol": "getOrder",
+    "endpoint": "GET /api/orders/{orderNumber}",
+    "expected": [
+      "bookstore-webapp"
+    ],
+    "evidence": [
+      "bookstore-webapp/.../clients/orders/OrderServiceClient.java:19 @GetExchange(\"/orders/api/orders/{orderNumber}\") via api-gateway"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "bs-neg-1",
+    "file": "bookstore-webapp/src/main/java/com/sivalabs/bookstore/webapp/web/controllers/ProductController.java",
+    "symbol": "showProductsPage",
+    "endpoint": "GET /products",
+    "expected": [],
+    "evidence": [],
+    "notes": "HTML page; browser only."
+  },
+  {
+    "id": "bs-neg-2",
+    "file": "bookstore-webapp/src/main/java/com/sivalabs/bookstore/webapp/web/controllers/OrderController.java",
+    "symbol": "getOrders",
+    "endpoint": "GET /api/orders (webapp BFF)",
+    "expected": [],
+    "evidence": [],
+    "notes": "Precision trap: the webapp serves the same /api/orders paths as order-service, but only the browser calls the webapp's."
+  }
+]

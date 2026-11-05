@@ -1,0 +1,89 @@
+[
+  {
+    "id": "ms-1",
+    "file": "mall-admin/src/main/java/com/macro/mall/controller/UmsAdminController.java",
+    "symbol": "login",
+    "endpoint": "POST /admin/login",
+    "expected": [
+      "mall-auth",
+      "mall-demo"
+    ],
+    "evidence": [
+      "mall-auth/src/main/java/com/macro/mall/auth/service/UmsAdminService.java:16,19 @FeignClient(\"mall-admin\") POST /admin/login",
+      "mall-demo/src/main/java/com/macro/mall/demo/service/FeignAdminService.java:13,16 @FeignClient(\"mall-admin\") POST /admin/login"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "ms-2",
+    "file": "mall-portal/src/main/java/com/macro/mall/portal/controller/UmsMemberController.java",
+    "symbol": "login",
+    "endpoint": "POST /sso/login",
+    "expected": [
+      "mall-auth",
+      "mall-demo"
+    ],
+    "evidence": [
+      "mall-auth/src/main/java/com/macro/mall/auth/service/UmsMemberService.java:14,16 @FeignClient(\"mall-portal\") POST /sso/login",
+      "mall-demo/src/main/java/com/macro/mall/demo/service/FeignPortalService.java:12,15 @FeignClient(\"mall-portal\") POST /sso/login"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "ms-3",
+    "file": "mall-admin/src/main/java/com/macro/mall/controller/PmsBrandController.java",
+    "symbol": "getList",
+    "endpoint": "GET /brand/listAll",
+    "expected": [
+      "mall-demo"
+    ],
+    "evidence": [
+      "mall-demo/.../FeignAdminService.java:19 GET /brand/listAll"
+    ],
+    "notes": "getList has two overloads; the seed is both."
+  },
+  {
+    "id": "ms-4",
+    "file": "mall-search/src/main/java/com/macro/mall/search/controller/EsProductController.java",
+    "symbol": "search",
+    "endpoint": "GET /esProduct/search/simple",
+    "expected": [
+      "mall-demo"
+    ],
+    "evidence": [
+      "mall-demo/src/main/java/com/macro/mall/demo/service/FeignSearchService.java:11,14 @FeignClient(\"mall-search\") GET /esProduct/search/simple"
+    ],
+    "notes": "search has two overloads; the seed is both."
+  },
+  {
+    "id": "ms-5",
+    "file": "mall-portal/src/main/java/com/macro/mall/portal/controller/OmsCartItemController.java",
+    "symbol": "list",
+    "endpoint": "GET /cart/list",
+    "expected": [
+      "mall-demo"
+    ],
+    "evidence": [
+      "mall-demo/.../FeignPortalService.java:18 GET /cart/list"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "ms-neg-1",
+    "file": "mall-admin/src/main/java/com/macro/mall/controller/PmsBrandController.java",
+    "symbol": "create",
+    "endpoint": "POST /brand/create",
+    "expected": [],
+    "evidence": [],
+    "notes": "No service caller."
+  },
+  {
+    "id": "ms-neg-2",
+    "file": "mall-portal/src/main/java/com/macro/mall/portal/controller/OmsCartItemController.java",
+    "symbol": "add",
+    "endpoint": "POST /cart/add",
+    "expected": [],
+    "evidence": [],
+    "notes": "No service caller."
+  }
+]

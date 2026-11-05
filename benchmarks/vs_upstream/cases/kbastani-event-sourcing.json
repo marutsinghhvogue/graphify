@@ -1,0 +1,136 @@
+[
+  {
+    "id": "kb-1",
+    "file": "user-service/src/main/java/demo/api/v1/UserControllerV1.java",
+    "symbol": "me",
+    "endpoint": "GET /uaa/v1/me",
+    "expected": [
+      "account-service",
+      "shopping-cart-service"
+    ],
+    "evidence": [
+      "account-service/src/main/java/demo/api/v1/AccountServiceV1.java:28 oAuth2RestTemplate.getForObject(\"http://user-service/uaa/v1/me\")",
+      "account-service/src/main/java/demo/user/UserClientV1.java @FeignClient(\"user-service\") GET /uaa/v1/me",
+      "shopping-cart-service/src/main/java/demo/api/v1/ShoppingCartServiceV1.java:62,99,185 getForObject(\"http://user-service/uaa/v1/me\")"
+    ],
+    "notes": "/uaa is server.contextPath (Spring Boot 1 camelCase) in user-service/src/main/resources/application.yml."
+  },
+  {
+    "id": "kb-2",
+    "file": "account-service/src/main/java/demo/api/v1/AccountControllerV1.java",
+    "symbol": "getUserAccount",
+    "endpoint": "ANY /v1/accounts",
+    "expected": [
+      "order-service"
+    ],
+    "evidence": [
+      "order-service/src/main/java/demo/api/v1/OrderServiceV1.java:34,107 getForObject(\"http://account-service/v1/accounts\")"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "kb-3",
+    "file": "catalog-service/src/main/java/demo/api/v1/CatalogControllerV1.java",
+    "symbol": "getCatalog",
+    "endpoint": "GET /v1/catalog",
+    "expected": [
+      "shopping-cart-service"
+    ],
+    "evidence": [
+      "shopping-cart-service/.../ShoppingCartServiceV1.java:102 getForObject(\"http://catalog-service/v1/catalog\")"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "kb-4",
+    "file": "inventory-service/src/main/java/demo/v1/InventoryControllerV1.java",
+    "symbol": "getAvailableInventoryForProductIds",
+    "endpoint": "GET /v1/inventory",
+    "expected": [
+      "shopping-cart-service"
+    ],
+    "evidence": [
+      "shopping-cart-service/.../ShoppingCartServiceV1.java:150 getForObject(String.format(\"http://inventory-service/v1/inventory?productIds=%s\", ...))"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "kb-5",
+    "file": "order-service/src/main/java/demo/api/v1/OrderControllerV1.java",
+    "symbol": "createOrder",
+    "endpoint": "POST /v1/orders",
+    "expected": [
+      "shopping-cart-service"
+    ],
+    "evidence": [
+      "shopping-cart-service/.../ShoppingCartServiceV1.java:165 postForObject(\"http://order-service/v1/orders\", ...)"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "kb-6",
+    "file": "order-service/src/main/java/demo/api/v1/OrderControllerV1.java",
+    "symbol": "addOrderEvent",
+    "endpoint": "POST /v1/orders/{orderId}/events",
+    "expected": [
+      "shopping-cart-service"
+    ],
+    "evidence": [
+      "shopping-cart-service/.../ShoppingCartServiceV1.java:179 postForEntity(String.format(\"http://order-service/v1/orders/%s/events\", ...))"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "kb-7",
+    "file": "inventory-service/src/main/java/demo/v1/InventoryControllerV1.java",
+    "symbol": "getProduct",
+    "endpoint": "GET /v1/products/{productId}",
+    "expected": [
+      "catalog-service"
+    ],
+    "evidence": [
+      "catalog-service/src/main/java/demo/api/v1/CatalogServiceV1.java:46 getForObject(String.format(\"http://inventory-service/v1/products/%s\", ...))"
+    ],
+    "notes": "catalog-service serves the same GET /v1/products/{productId}; only the host names inventory."
+  },
+  {
+    "id": "kb-8",
+    "file": "inventory-service/src/main/java/demo/catalog/CatalogRepository.java",
+    "symbol": "CatalogRepository",
+    "endpoint": "Spring Data REST /api/catalogs",
+    "expected": [
+      "catalog-service"
+    ],
+    "evidence": [
+      "catalog-service/src/main/java/demo/api/v1/CatalogServiceV1.java:34,37 getForObject(String.format(\"http://inventory-service/api/catalogs/...\"))"
+    ],
+    "notes": "Exported by Spring Data REST by default (no annotation); base path /api set in InventoryApplication.java:54."
+  },
+  {
+    "id": "kb-neg-1",
+    "file": "catalog-service/src/main/java/demo/api/v1/CatalogControllerV1.java",
+    "symbol": "getProduct",
+    "endpoint": "GET /v1/products/{productId}",
+    "expected": [],
+    "evidence": [],
+    "notes": "Precision trap: same route as inventory-service's getProduct, which catalog-service itself calls; nothing calls catalog's."
+  },
+  {
+    "id": "kb-neg-2",
+    "file": "shopping-cart-service/src/main/java/demo/api/v1/ShoppingCartControllerV1.java",
+    "symbol": "getCart",
+    "endpoint": "GET /v1/cart",
+    "expected": [],
+    "evidence": [],
+    "notes": "Browser UI only."
+  },
+  {
+    "id": "kb-neg-3",
+    "file": "payment-service/src/main/java/demo/UserController.java",
+    "symbol": "getUser",
+    "endpoint": "GET /users/{id}",
+    "expected": [],
+    "evidence": [],
+    "notes": "No service caller."
+  }
+]

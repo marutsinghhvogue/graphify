@@ -4,20 +4,71 @@
     "sha": "6bb2cf9ddbca980b664d3edbb6ff775d75369278",
     "root": ".",
     "transport": "http",
-    "frameworks": "Spring Boot, Feign (@FeignClient), Spring @Scheduled; context paths set in config-server YAML"
+    "frameworks": "Spring Boot, Feign (@FeignClient), Spring @Scheduled; context paths set in config-server YAML",
+    "split": "dev"
   },
   "spring-petclinic-microservices": {
     "url": "https://github.com/spring-petclinic/spring-petclinic-microservices.git",
     "sha": "e8b747ab522721076cacb5cf688eb8a54ba8c5c9",
     "root": ".",
     "transport": "http",
-    "frameworks": "Spring Boot, reactive WebClient, RestClient, Spring Cloud Gateway"
+    "frameworks": "Spring Boot, reactive WebClient, RestClient, Spring Cloud Gateway",
+    "split": "dev"
   },
   "microservices-demo": {
     "url": "https://github.com/GoogleCloudPlatform/microservices-demo.git",
     "sha": "c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712",
     "root": "src",
     "transport": "grpc",
-    "frameworks": "gRPC across Go, Python, C# (a known gap for the fork's HTTP-only contract layer)"
+    "frameworks": "gRPC across Go, Python, C# (a known gap for the fork's HTTP-only contract layer)",
+    "split": "dev"
+  },
+  "in28minutes-v3": {
+    "url": "https://github.com/in28minutes/spring-microservices-v3.git",
+    "sha": "95b78e9f1d644c623748ac7515b2d1350036043f",
+    "root": "03.microservices",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Boot 3, Feign, RestClient, Spring Cloud Gateway routes in Java"
+  },
+  "ewolff-microservice": {
+    "url": "https://github.com/ewolff/microservice.git",
+    "sha": "d1ccf504df5617288479902ad9eb2111df73ed65",
+    "root": "microservice-demo",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Boot, RestTemplate with String.format URLs, Spring Data REST repositories as producers"
+  },
+  "bookstore": {
+    "url": "https://github.com/sivaprasadreddy/spring-boot-microservices-course.git",
+    "sha": "5899a53015228692410b8120df82924e665a5d70",
+    "root": ".",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Boot 3, RestClient with baseUrl, Spring 6 HTTP interfaces (@GetExchange) through a prefix-stripping gateway"
+  },
+  "eazybytes-s20": {
+    "url": "https://github.com/eazybytes/microservices.git",
+    "sha": "dca4c28d6bfd730d3c39c393ba90758aae656a46",
+    "root": "section_20",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Boot 3, Feign with fallbacks; the same /api/fetch path in three services"
+  },
+  "mall-swarm": {
+    "url": "https://github.com/macrozheng/mall-swarm.git",
+    "sha": "04c442fe318356bae4445a109dde7af297ce1e84",
+    "root": ".",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Cloud Alibaba, positional @FeignClient(\"svc\"), @RequestMapping(value=, method=)"
+  },
+  "kbastani-event-sourcing": {
+    "url": "https://github.com/kbastani/spring-cloud-event-sourcing-example.git",
+    "sha": "01f435d6750a074c7c7c0ef8d5919da5cf809fc5",
+    "root": ".",
+    "transport": "http",
+    "split": "heldout",
+    "frameworks": "Spring Boot 1, @LoadBalanced (OAuth2)RestTemplate with discovery hosts and String.format URLs, Feign, Spring Data REST, server.contextPath"
   }
 }
