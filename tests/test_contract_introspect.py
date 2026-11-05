@@ -277,3 +277,203 @@ def test_reconcile_keeps_ambiguous_and_unmatched_as_new():
     assert rec["kept_new"] == 1
     kept_ids = {n["id"] for n in out["nodes"]}
     assert {"svc_a_fn_save", "svc_b_fn_ghost"} <= kept_ids
+
+
+# ── real-world Spring idioms (benchmarks/vs_upstream) ─────────────────────────
+
+
+def _java_svc(root, svc, rel, body):
+    f = root / svc / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(body)
+    return f
+
+
+def test_method_level_requestmapping_with_method_attribute_is_an_endpoint(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = _java_svc(tmp_path, "account", "AccountController.java",
+        "@RestController\n"
+        "public class AccountController {\n"
+        '    @RequestMapping(path = "/{name}", method = RequestMethod.GET)\n'
+        "    public Account getAccountByName(@PathVariable String name) {\n"
+        "        return null;\n"
+        "    }\n"
+        '    @RequestMapping(value = "/current", method = RequestMethod.PUT)\n'
+        "    public void saveCurrentAccount(Principal p) {}\n"
+        "}\n")
+    eps = ci._extract_endpoints(f, "account", f.read_text().splitlines(), "java")
+    # no type-level mapping: the first method's path must not become a class prefix
+    assert {(e.method, e.path, e.handler) for e in eps} == {
+        ("GET", "/{}", "getAccountByName"), ("PUT", "/current", "saveCurrentAccount")}
+
+
+def test_bare_mapping_under_class_prefix_and_requestmapping_without_path(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = _java_svc(tmp_path, "users", "UserController.java",
+        '@RequestMapping("/users")\n'
+        "@RestController\n"
+        "public class UserController {\n"
+        "    @GetMapping\n"
+        "    public List<User> findAll() { return null; }\n"
+        "    @RequestMapping(method = RequestMethod.POST)\n"
+        "    public void createUser(User u) {}\n"
+        "}\n")
+    eps = ci._extract_endpoints(f, "users", f.read_text().splitlines(), "java")
+    assert {(e.method, e.path, e.handler) for e in eps} == {
+        ("GET", "/users", "findAll"), ("POST", "/users", "createUser")}
+
+
+def test_feign_interface_methods_with_requestmapping_are_calls(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = _java_svc(tmp_path, "notifier", "AccountServiceClient.java",
+        '@FeignClient(name = "account-service")\n'
+        "public interface AccountServiceClient {\n"
+        '    @RequestMapping(method = RequestMethod.GET, value = "/accounts/{accountName}")\n'
+        '    String getAccount(@PathVariable("accountName") String accountName);\n'
+        "}\n")
+    calls = ci._extract_java_consumers(f, "notifier", f.read_text().splitlines())
+    assert [(c.method, c.path, c.caller, c.target_service) for c in calls] == [
+        ("GET", "/accounts/{}", "getAccount", "account-service")]
+
+
+def test_concatenated_urls_and_fluent_verbs(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = _java_svc(tmp_path, "genai", "AIDataProvider.java",
+        "public class AIDataProvider {\n"
+        "    public PetDetails addPetToOwner(int ownerId, PetRequest req) {\n"
+        "        return restClient\n"
+        "            .post()\n"
+        '            .uri(getCustomerServiceUri() + "/owners/" + ownerId + "/pets")\n'
+        "            .body(req).retrieve().body(PetDetails.class);\n"
+        "    }\n"
+        "    public Visits visits(List<Integer> ids) {\n"
+        '        return webClient.get().uri(hostname + "pets/visits?petId={petId}", ids);\n'
+        "    }\n"
+        "    public void owner(int id) {\n"
+        '        webClient.get().uri("http://customers-service/owners/{ownerId}", id);\n'
+        "    }\n"
+        "}\n")
+    calls = ci._extract_java_consumers(f, "genai", f.read_text().splitlines())
+    assert [(c.method, c.path, c.caller, c.target_service) for c in calls] == [
+        ("POST", "/owners/{}/pets", "addPetToOwner", ""),
+        ("GET", "/pets/visits", "visits", ""),
+        ("GET", "/owners/{}", "owner", "customers-service"),
+    ]
+
+
+def test_map_put_and_test_sources_are_not_calls(tmp_path):
+    import graphify.contract_introspect as ci
+
+    f = _java_svc(tmp_path, "stats", "src/main/java/Converter.java",
+        "public class Converter {\n"
+        "    public Map<String, Object> convert(DataPoint p) {\n"
+        '        map.put("date", p.getDate());\n'
+        '        map.put(key + "account", p.getAccount());\n'
+        "        return map;\n"
+        "    }\n"
+        "}\n")
+    assert ci._extract_java_consumers(f, "stats", f.read_text().splitlines()) == []
+    _java_svc(tmp_path, "stats", "src/test/java/ClientTest.java",
+        "public class ClientTest {\n"
+        '    public void t() { restTemplate.getForObject("/accounts/demo", String.class); }\n'
+        "}\n")
+    assert ci.scan_service(tmp_path / "stats", "stats") == ([], [])
+
+
+def test_context_path_from_config_server_prefixes_endpoints_and_matches_feign(tmp_path):
+    import graphify.contract_introspect as ci
+
+    _java_svc(tmp_path, "statistics-service", "src/main/java/StatisticsController.java",
+        "@RestController\n"
+        "public class StatisticsController {\n"
+        '    @RequestMapping(value = "/{accountName}", method = RequestMethod.PUT)\n'
+        "    public void saveAccountStatistics(String accountName) {}\n"
+        "}\n")
+    _java_svc(tmp_path, "statistics-service", "src/main/resources/bootstrap.yml",
+        "spring:\n  application:\n    name: statistics-service\n")
+    _java_svc(tmp_path, "config", "src/main/resources/shared/statistics-service.yml",
+        "server:\n  servlet:\n    context-path: /statistics\n")
+    _java_svc(tmp_path, "account-service", "src/main/java/StatisticsServiceClient.java",
+        '@FeignClient(name = "statistics-service")\n'
+        "public interface StatisticsServiceClient {\n"
+        '    @RequestMapping(method = RequestMethod.PUT, value = "/statistics/{accountName}")\n'
+        '    void updateStatistics(@PathVariable("accountName") String accountName, Account a);\n'
+        "}\n")
+    g = ci.cross_service_graph(tmp_path)
+    assert g["stats"]["matched_named"] == 1
+    (edge,) = [e for e in g["edges"] if e["relation"] == "calls_service"]
+    assert edge["metadata"]["to_service"] == "statistics-service"
+    assert edge["metadata"]["path"] == "/statistics/{}"
+
+
+def test_discovery_host_resolves_through_spring_application_name(tmp_path):
+    import graphify.contract_introspect as ci
+
+    _java_svc(tmp_path, "petclinic-customers", "src/main/java/OwnerResource.java",
+        '@RequestMapping("/owners")\n'
+        "public class OwnerResource {\n"
+        '    @GetMapping(value = "/{ownerId}")\n'
+        "    public Owner findOwner(int ownerId) { return null; }\n"
+        "}\n")
+    _java_svc(tmp_path, "petclinic-customers", "src/main/resources/application.yml",
+        "spring:\n  application:\n    name: customers-service\n")
+    # a second service serving the same path: the host must pick customers
+    _java_svc(tmp_path, "petclinic-legacy", "src/main/java/LegacyOwners.java",
+        '@RequestMapping("/owners")\n'
+        "public class LegacyOwners {\n"
+        '    @GetMapping("/{id}")\n'
+        "    public Owner legacy(int id) { return null; }\n"
+        "}\n")
+    _java_svc(tmp_path, "petclinic-gateway", "src/main/java/CustomersServiceClient.java",
+        "public class CustomersServiceClient {\n"
+        "    public Mono<OwnerDetails> getOwner(final int ownerId) {\n"
+        '        return webClient.get().uri("http://customers-service/owners/{ownerId}", ownerId);\n'
+        "    }\n"
+        "}\n")
+    g = ci.cross_service_graph(tmp_path)
+    xs = [e for e in g["edges"] if e["relation"] == "calls_service"]
+    assert [e["metadata"]["to_service"] for e in xs] == ["petclinic-customers"]
+    assert xs[0]["confidence"] == "INFERRED" and not xs[0]["metadata"]["ambiguous"]
+
+
+def test_reconcile_picks_the_overload_under_the_route_annotation():
+    import graphify.contract_introspect as ci
+
+    base = {"nodes": [
+        {"id": "read_a", "label": ".read()", "source_file": "visits/VisitResource.java", "source_location": "L68"},
+        {"id": "read_b", "label": ".read()", "source_file": "visits/VisitResource.java", "source_location": "L73"},
+    ]}
+    contract = {"nodes": [
+        {"id": "svc_visits_fn_read", "label": "read()", "kind": "function",
+         "source_file": "/abs/visits/VisitResource.java", "source_location": "L72",
+         "metadata": {"service": "visits", "anchor": "next"}},
+    ], "edges": [
+        {"source": "svc_gw_fn_get", "target": "svc_visits_fn_read", "relation": "calls_service"},
+    ]}
+    out = ci.reconcile_contract(base, contract)
+    assert out["reconciliation"]["matched"] == 1
+    assert out["edges"][0]["target"] == "read_b"
+
+
+def test_introspector_paths_are_made_root_relative(tmp_path, monkeypatch):
+    from graphify.cli import _relativize_emitted
+
+    root = tmp_path / "estate"
+    (root / "svc").mkdir(parents=True)
+    (root / "svc" / "Job.java").write_text("")
+    monkeypatch.chdir(tmp_path)
+    result = {
+        "nodes": [{"source_file": str(root / "svc" / "Job.java")},       # absolute
+                  {"source_file": "estate/svc/Job.java"},                 # cwd-relative
+                  {"source_file": "svc/Job.java"},                        # already root-relative
+                  {"source_file": "/elsewhere/X.java"}],                  # outside root: kept
+        "edges": [{"source_file": str(root / "svc" / "Job.java")}],
+    }
+    _relativize_emitted(result, root)
+    assert [n["source_file"] for n in result["nodes"]] == [
+        "svc/Job.java", "svc/Job.java", "svc/Job.java", "/elsewhere/X.java"]
+    assert result["edges"][0]["source_file"] == "svc/Job.java"

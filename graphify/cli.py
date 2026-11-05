@@ -197,6 +197,27 @@ def _rel_to_root(file_path: str, root: "Path") -> "str | None":
         return None
 
 
+def _relativize_emitted(result: dict, root: Path) -> dict:
+    """Rewrite an introspector's ``source_file`` paths to the root-relative form the
+    AST nodes in graph.json use. Introspectors record the path they scanned, which
+    is absolute (or cwd-relative for a relative target); left as-is, their schedule/
+    event/route nodes group under a bogus top-level "service" such as ``/``. Paths
+    outside ``root`` are kept unchanged."""
+    root = root.resolve()
+    for item in [*result.get("nodes", []), *result.get("edges", [])]:
+        sf = item.get("source_file")
+        if not isinstance(sf, str) or not sf:
+            continue
+        p = Path(sf.replace("\\", "/"))
+        # a relative path is cwd-relative when it exists from here, else root-relative
+        cand = p if p.is_absolute() else (p if p.exists() else root / p)
+        try:
+            item["source_file"] = cand.resolve().relative_to(root).as_posix()
+        except (ValueError, OSError, RuntimeError):
+            pass
+    return result
+
+
 def _search_hint_terms(t: dict) -> list[str]:
     """Words the agent searched for: the Grep `pattern`, or the pattern argument of
     a shell content search. Empty when there is nothing to go on."""
@@ -4804,7 +4825,7 @@ def dispatch_command(cmd: str) -> None:
             # same functions so cross-service edges attach to real code nodes (and
             # blast radius can traverse into them), not a disconnected svc_* island.
             # Stamps metadata.service on the matched AST nodes in place.
-            xsvc_result = reconcile_contract(ast_result, xsvc_raw)
+            xsvc_result = _relativize_emitted(reconcile_contract(ast_result, xsvc_raw), Path(target))
             _xs = xsvc_raw.get("stats", {})
             _rec = xsvc_result.get("reconciliation", {})
             print(f"[graphify extract] cross-service: {len(xsvc_result['nodes'])} new nodes, "
@@ -4830,7 +4851,7 @@ def dispatch_command(cmd: str) -> None:
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(1)
-            sched_result = reconcile_contract(ast_result, sched_raw)
+            sched_result = _relativize_emitted(reconcile_contract(ast_result, sched_raw), Path(target))
             _sc = sched_raw.get("stats", {})
             _srec = sched_result.get("reconciliation", {})
             _by = ", ".join(f"{k}={v}" for k, v in sorted(_sc.get("by_provider", {}).items()))
@@ -4854,7 +4875,7 @@ def dispatch_command(cmd: str) -> None:
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(1)
-            bind_result = reconcile_contract(ast_result, bind_raw)
+            bind_result = _relativize_emitted(reconcile_contract(ast_result, bind_raw), Path(target))
             _b = bind_raw.get("stats", {})
             _brec = bind_result.get("reconciliation", {})
             _bc = ", ".join(f"{k}={v}" for k, v in sorted(_b.get("by_category", {}).items()))
@@ -4880,7 +4901,7 @@ def dispatch_command(cmd: str) -> None:
             _cl = cloud_raw.get("stats", {})
             # Resolve `triggers` handler targets (Lambda func names) onto the AST
             # nodes so blast radius crosses infra→code.
-            cloud_result = reconcile_contract(ast_result, cloud_raw)
+            cloud_result = _relativize_emitted(reconcile_contract(ast_result, cloud_raw), Path(target))
             _resolved = cloud_result.get("reconciliation", {}).get("type_targets_resolved", 0)
             _clby = ", ".join(f"{k}={v}" for k, v in sorted(_cl.get("by_provider", {}).items()))
             print(f"[graphify extract] cloud schedulers: {_cl.get('schedules', 0)} found"
@@ -4901,7 +4922,7 @@ def dispatch_command(cmd: str) -> None:
             except OSError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(1)
-            taint_result = findings_to_graph(_scan["findings"])
+            taint_result = _relativize_emitted(findings_to_graph(_scan["findings"]), Path(target))
             _tby = ", ".join(f"{k}={v}" for k, v in sorted(_scan["stats"]["by_vuln"].items()))
             print(f"[graphify extract] taint: {_scan['stats']['findings']} finding(s)"
                   + (f" ({_tby})" if _tby else ""))

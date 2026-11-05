@@ -49,25 +49,42 @@ had to change.
 - Message and event consumers. No estate here has them yet; add one with
   Kafka/RabbitMQ consumers to cover `consumes` edges.
 
-## Baseline (2026-11-04)
+## Results
 
-upstream `0a8cd4e1` (v0.9.97) vs fork `392d6376`. Results are identical at depths 2, 4 and 6.
+### 2026-11-05: after fixing the five Spring HTTP gaps
 
-| transport | upstream | fork-ast | fork | FP on negative controls (all tools) |
+upstream `0a8cd4e1` (v0.9.97) vs fork `feat/bench-vs-upstream`. Results are identical at depths 2, 4 and 6.
+
+| transport | upstream | fork-ast | fork | FP on negative controls |
 |---|---|---|---|---|
-| HTTP (13 cases, 9 consumer links) | 0/9 | 0/9 | **1/9**, precision 100% | 0 |
+| HTTP (13 cases, 9 consumer links) | 0/9 | 0/9 | **9/9**, precision 100%, 9/9 cases exact | 0 for every tool |
 | gRPC (4 cases, 6 consumer links) | 0/6 | 0/6 | 0/6 | n/a |
 
-The fork's only hit is petclinic's gateway `getOwner` → customers `findOwner`. Every
-miss traces to a pattern the contract layer doesn't parse yet:
+What changed in `contract_introspect.py`:
 
-- Spring `@RequestMapping(value=…, method=RequestMethod.X)` on methods (piggymetrics
-  yields no endpoints at all)
-- Feign interface methods as calls
-- `server.servlet.context-path` prefixes from service or config-server YAML
-- bare `@GetMapping`/`@PostMapping` under a class-level prefix
-- concatenated URLs such as `.uri(host + "/owners")`
-- gRPC (not modeled)
+- every Spring `@*Mapping` form, including `@RequestMapping(value=…, method=…)` and bare mappings
+- type-level prefixes taken only from above the class declaration
+- Feign interface methods read as calls
+- `context-path` and `spring.application.name` read from the service's own config or config-server YAML
+- concatenated URLs, and fluent `.post().uri(…)` verbs
+- service-discovery hosts used as named targets
+- test sources skipped, and `Map.put` no longer read as an HTTP call
 
-Precision risks seen while diagnosing: `src/test` files are scanned as callers, and
-`Map.put("/date", …)` is read as an HTTP PUT.
+`extract` also now writes introspector nodes with root-relative paths. Before
+this, scheduler and event nodes landed under a bogus `/` service; this caused
+the two false positives in the first post-fix run.
+
+**Caveat: these cases are not held out.** The patterns were fixed while reading
+these two estates, so 9/9 shows the fixes work, not how well they generalize.
+The next honest measurement is a Spring estate nobody has looked at.
+
+### 2026-11-04: baseline
+
+upstream `0a8cd4e1` vs fork `392d6376`: HTTP upstream 0/9, fork-ast 0/9, fork 1/9 (precision 100%); gRPC 0/6 for all. Misses traced to:
+
+- method-level `@RequestMapping(value=…, method=…)` (piggymetrics yielded no endpoints)
+- Feign interface methods not read as calls
+- `context-path` from config-server YAML
+- bare `@GetMapping` under a class prefix
+- concatenated `.uri(host + "/path")` URLs
+- gRPC
