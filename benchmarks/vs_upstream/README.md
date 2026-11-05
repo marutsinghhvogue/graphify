@@ -51,6 +51,50 @@ had to change.
 
 ## Results
 
+### 2026-11-05: held-out Spring estates (detector frozen at `c13fe303`)
+
+Six public Spring estates that nobody had looked at while building the
+detector: in28minutes-v3, ewolff-microservice, bookstore, eazybytes-s20,
+mall-swarm, kbastani-event-sourcing. Their labels were committed in `d15fb6cb`
+before any tool ran on them. Consumers were found by searching for service
+names, URL literals and URL config, not by the detector's patterns. Results are
+identical at depths 2, 4 and 6.
+
+| | upstream | fork-ast | fork |
+|---|---|---|---|
+| recall (26 consumer links) | 0/26 | 0/26 | **11/26 (42%)** |
+| precision | n/a | n/a | 85% |
+| exact cases (22 positive) | 0 | 0 | 8 |
+| FP on 15 negative controls | 0 | 0 | 0 |
+
+**This is the generalization number.** The dev estates (9/9) were tuned on.
+
+The 15 missed links, by cause:
+
+| cause | links | cases |
+|---|---|---|
+| same-named handlers in one service share an emitted node id (`svc_<service>_fn_<name>`), so edges land on another controller's method | 2 | ms-3, ms-5 |
+| package-private handler methods (no `public`) resolve to `<unknown>` | 1 (and blocks the 4 below) | bs-1 |
+| Spring 6 HTTP interfaces (`@GetExchange`/`@PostExchange`) through a prefix-stripping gateway | 4 | bs-1 to bs-4 |
+| `String.format("http://svc/path/%s", …)` URLs | 3 | kb-4, kb-6, kb-7 |
+| Spring Boot 1 `server.contextPath` (camelCase key) | 2 | kb-1 |
+| Spring Data REST repositories as producers (plus format- or helper-built URLs) | 3 | ew-1, ew-2, kb-8 |
+
+About the false positives:
+
+- kb-2's extra service (shopping-cart) is real transitive impact: the cart's
+  `checkout` calls order-service's `createOrder`, which calls the seeded
+  account endpoint. Labels count only direct consumers, so it is scored as an
+  FP. It was not relabelled after seeing results.
+- kb-8's extra service (order-service) comes from an AST import link that
+  upstream makes too: every kbastani service uses the Java package `demo`.
+
+ms-4 is a lucky hit. Its Feign method's parameters span two lines, so the
+caller resolves to `<unknown>`, but that stray node sits in the right file.
+
+Fixing any of these makes these estates dev data. Measure each fix on a fresh
+held-out set.
+
 ### 2026-11-05: after fixing the five Spring HTTP gaps
 
 upstream `0a8cd4e1` (v0.9.97) vs fork `feat/bench-vs-upstream`. Results are identical at depths 2, 4 and 6.
