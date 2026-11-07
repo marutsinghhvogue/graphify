@@ -460,3 +460,40 @@ def test_non_colliding_types_keep_their_ids_beside_a_colliding_pair(tmp_path: Pa
 
     alone = ids(_gin_corpus(tmp_path, _GIN_CONTEXT, other))
     assert ids(_gin_corpus(tmp_path, _GIN_IFACE, _GIN_STRUCT, _GIN_CONTEXT, other)) == alone
+
+
+def test_go_import_path_is_resolved_once_per_file(tmp_path: Path, monkeypatch) -> None:
+    """The qualified-call filter asks for a candidate's import path once per call;
+    on kubernetes that was 2.8M lookups, each re-walking the directory's parents.
+    A run must resolve each file at most once, and still bind the calls."""
+    import graphify.extract as ex
+
+    (tmp_path / "go.mod").write_text("module example.com/m\n\ngo 1.22\n")
+    for pkg in ("a", "b"):
+        (tmp_path / pkg).mkdir()
+        (tmp_path / pkg / f"{pkg}.go").write_text(
+            f"package {pkg}\n\nfunc Do() int {{ return 1 }}\nfunc Run() int {{ return 2 }}\n"
+        )
+    (tmp_path / "app").mkdir()
+    calls = "\n".join(
+        f"func F{i}() int {{ return a.Do() + b.Do() + a.Run() + b.Run() }}" for i in range(20)
+    )
+    (tmp_path / "app" / "app.go").write_text(
+        'package app\n\nimport (\n\t"example.com/m/a"\n\t"example.com/m/b"\n)\n\n' + calls + "\n"
+    )
+
+    looked_up: list[str] = []
+    real = ex._go_import_path_for_file
+
+    def counting(source_file, root, module_cache=None):
+        looked_up.append(str(source_file))
+        return real(source_file, root, module_cache)
+
+    monkeypatch.setattr(ex, "_go_import_path_for_file", counting)
+    result = _extract(tmp_path)
+
+    assert len(looked_up) == len(set(looked_up)), "a file's import path was resolved more than once"
+    f0 = _ids(result, label="F0", suffix="app.go")
+    a_do = _ids(result, label="Do", suffix="a/a.go")
+    assert any(e.get("relation") == "calls" and e["source"] in f0 and e["target"] in a_do
+               for e in result["edges"]), "a.Do() no longer binds to package a"

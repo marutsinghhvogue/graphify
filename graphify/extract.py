@@ -10775,6 +10775,18 @@ def extract(
     # of these files with no import evidence is gated below (#1659).
     _JS_TS_CALL_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
     _go_module_cache: dict[Path, str | None] = {}
+    # Source file -> canonical Go import path, for this run. The qualified-call
+    # filter below asks once per candidate of every Go call, so the same files
+    # come up millions of times on a large module; _go_import_path_for_file only
+    # caches module roots and re-walks each directory's parents (one stat per
+    # level) every time. On kubernetes/staging that walk was 61% of extract.
+    _go_import_paths: dict[str, str | None] = {}
+
+    def _go_import_path(source_file: str) -> str | None:
+        if source_file not in _go_import_paths:
+            _go_import_paths[source_file] = _go_import_path_for_file(source_file, root, _go_module_cache)
+        return _go_import_paths[source_file]
+
     # Enum members (`case_of`) and fields/properties (`defines`) are never what a
     # C# `new X()` constructs. Same exclusion the C# type-definition index uses
     # (#3815); without it a `new List<T>()` binds to an enum member named `List`.
@@ -10918,9 +10930,7 @@ def extract(
             import_path = str(rc["import_path"])
             candidates = [
                 candidate for candidate in candidates
-                if _go_import_path_for_file(
-                    nid_to_source_file.get(candidate, ""), root, _go_module_cache
-                ) == import_path
+                if _go_import_path(nid_to_source_file.get(candidate, "")) == import_path
             ]
             if not candidates:
                 continue
@@ -11143,7 +11153,7 @@ def extract(
     for sf, fnid in sf_to_file_nid.items():
         if not sf.endswith(".go"):
             continue
-        import_path = _go_import_path_for_file(sf, root, _go_module_cache)
+        import_path = _go_import_path(sf)
         if import_path:
             go_pkg_files.setdefault(import_path, []).append(fnid)
     if go_pkg_files:
