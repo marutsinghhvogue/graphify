@@ -33,6 +33,7 @@ cycles may add document-level occurrence support.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 from pathlib import Path
 from typing import Any
@@ -678,7 +679,8 @@ def _scip_match_name(node: dict) -> str:
     """The name a SCIP definition carries in source. A constructor's descriptor is
     ``Type#`<init>`().`` (label ``init``); tree-sitter labels it with the type name."""
     sym = (node.get("metadata") or {}).get("scip_symbol") or ""
-    desc = _scip_descriptor(sym) if sym else ""
+    # stored metadata is HTML-escaped by sanitize_metadata (`<init>` → `&lt;init&gt;`)
+    desc = html.unescape(_scip_descriptor(sym)) if sym else ""
     if "<init>" in desc:
         owner = desc.split("<init>", 1)[0].rstrip("`#")
         return _scip_label(owner)
@@ -750,7 +752,13 @@ def reconcile_scip(
     by_file_name: dict[tuple[str, str], list[dict]] = defaultdict(list)
     # dotted FQN → unresolved base type stubs (no source file), for external folding
     stubs_by_fqn: dict[str, list[dict]] = defaultdict(list)
+    # SCIP symbol → base node already carrying it (a module merged earlier defines
+    # it): an external reference to that symbol is the same entity, across modules.
+    defined_symbol: dict[str, str] = {}
     for n in base_nodes:
+        bmeta = n.get("metadata") if isinstance(n.get("metadata"), dict) else {}
+        if bmeta.get("scip_symbol") and not bmeta.get("scip_external"):
+            defined_symbol.setdefault(bmeta["scip_symbol"], n["id"])
         if not n.get("source_file"):
             stubs_by_fqn[(n.get("label") or "").strip()].append(n)
         line = _parse_line(n.get("source_location"))
@@ -775,7 +783,10 @@ def reconcile_scip(
             # both graphs' references to it share one node (and SCIP's edge can
             # supersede, rather than "contradict", the stub edge).
             stub = stubs_by_fqn.get(_scip_fqn(meta.get("scip_symbol") or ""), [])
-            if len(stub) == 1:
+            if meta.get("scip_symbol") in defined_symbol:
+                id_map[sid] = defined_symbol[meta["scip_symbol"]]
+                external_folded += 1
+            elif len(stub) == 1:
                 id_map[sid] = stub[0]["id"]
                 external_folded += 1
             else:
@@ -815,7 +826,13 @@ def reconcile_scip(
             cmeta = canon.get("metadata")
             if not isinstance(cmeta, dict):
                 cmeta = {}
-            if meta.get("scip_symbol"):
+            # Several SCIP definitions can land on one node: a record's type and its
+            # implicit canonical constructor share the declaration line. Keep the
+            # owner's symbol, not one of its members' (Type# over Type#`<init>`().).
+            prev = cmeta.get("scip_symbol")
+            if meta.get("scip_symbol") and not (
+                prev and _scip_descriptor(meta["scip_symbol"]).startswith(_scip_descriptor(prev))
+            ):
                 cmeta["scip_symbol"] = meta["scip_symbol"]
             canon["metadata"] = cmeta
             if meta.get("scip_kind") and not canon.get("kind"):
@@ -879,6 +896,18 @@ def reconcile_scip(
         for c in callers:
             resolved[c][name].add(e["target"])
     stub_ids = {n["id"] for n in base_nodes if not n.get("source_file")}
+    implemented: dict[str, set] = defaultdict(set)   # implementation → what it implements
+    for e in base_edges + remapped_scip:
+        if e.get("relation") in ("implements", "overrides"):
+            implemented[e.get("source")].add(e.get("target"))
+    symbol_of: dict[str, str] = {}
+    file_of: dict[str, str] = {}
+    for n in base_nodes + scip_only:
+        nmeta = n.get("metadata") if isinstance(n.get("metadata"), dict) else {}
+        if nmeta.get("scip_symbol"):
+            symbol_of[n["id"]] = _scip_descriptor(nmeta["scip_symbol"])
+        if n.get("source_file") and not nmeta.get("scip_external"):
+            file_of[n["id"]] = n["source_file"]
     for e in remapped_scip:
         k = (e.get("source"), e.get("target"), e.get("relation"))
         cur = merged.get(k)
@@ -898,7 +927,24 @@ def reconcile_scip(
         targets = resolved.get(e.get("source"), {}).get(_bare_name(label_of.get(e.get("target"), "")))
         if not targets or e.get("target") in targets:
             return False
-        return e.get("target") not in stub_ids
+        if e.get("target") in stub_ids:
+            return False
+        # Same entity under another node: `new X()` is the class to tree-sitter and
+        # X#`<init>`() to SCIP (symbol prefix, either way round), or SCIP's copy of a
+        # definition that did not join sits in the same file under the same name.
+        # Dynamic dispatch: SCIP resolves a call to the static type's method, while
+        # tree-sitter bound the implementation that runs. Both describe the call.
+        if implemented.get(e.get("target"), set()) & targets:
+            return False
+        tsym = symbol_of.get(e.get("target"), "")
+        tfile = file_of.get(e.get("target"), "")
+        for t in targets:
+            osym = symbol_of.get(t, "")
+            if tsym and osym and (osym.startswith(tsym) or tsym.startswith(osym)):
+                return False
+            if tfile and file_of.get(t) == tfile:
+                return False
+        return True
 
     # Per-caller demote: demote (keep, retag AMBIGUOUS) a contradicted base
     # call/reference by default; drop it only under strict.

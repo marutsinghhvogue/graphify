@@ -347,3 +347,67 @@ def test_field_type_reference_credited_to_the_owning_class():
         n.pop("metadata", None); n.pop("kind", None)
     out = reconcile_scip(base, scip)
     assert out["reconciliation"]["demoted"] == 1
+
+
+def test_constructor_call_confirms_tree_sitter_edge_to_the_class():
+    # `new X()`: tree-sitter targets the class, SCIP the constructor X#`<init>`().
+    base = {"nodes": [_n("m", ".find()", "svc/S.java", 10), _n("x", "XException", "svc/XException.java", 3),
+                      _n("x_ctor", ".XException()", "svc/XException.java", 5)],
+            "edges": [_e("m", "x", "calls")]}
+    scip = {"nodes": [_n("s_m", "find", "svc/S.java", 9, metadata={"scip_symbol": _sym("svc/S#find().")}),
+                      _n("s_x", "XException", "svc/XException.java", 2, metadata={"scip_symbol": _sym("svc/XException#")}),
+                      _n("s_ctor", "init", "svc/XException.java", 4,
+                         metadata={"scip_symbol": _sym("svc/XException#`<init>`().")})],
+            "edges": [_e("s_m", "s_ctor", "calls", context="scip")]}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["demoted"] == 0
+
+
+def test_call_through_interface_confirms_edge_to_the_implementation():
+    base = {"nodes": [_n("t", ".fanOut_test()", "svc/ImplTest.java", 20),
+                      _n("api", ".broadcast()", "svc/Service.java", 4), _n("impl", ".broadcast()", "svc/ServiceImpl.java", 30)],
+            "edges": [_e("t", "impl", "calls"), _e("impl", "api", "implements")]}
+    scip = {"nodes": [_n("s_t", "fanOut_test", "svc/ImplTest.java", 19,
+                         metadata={"scip_symbol": _sym("svc/ImplTest#fanOut_test().")}),
+                      _n("s_api", "broadcast", "svc/Service.java", 3, metadata={"scip_symbol": _sym("svc/Service#broadcast().")})],
+            "edges": [_e("s_t", "s_api", "calls", context="scip")]}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["demoted"] == 0
+
+
+def test_external_symbol_defined_by_an_earlier_merged_module_folds_onto_it():
+    # module A (a shared library) was merged first and defines Perm#; module B's
+    # index references it as an external symbol with the identical string.
+    perm_sym = "semanticdb maven maven/com.acme/auth 1.0 com/acme/auth/RequiresRole#"
+    base = {"nodes": [_n("perm", "RequiresRole", "libs/auth/RequiresRole.java", 4,
+                         metadata={"scip_symbol": perm_sym}),
+                      _n("h", ".onEvent()", "svc-b/Handler.java", 12)],
+            "edges": [_e("h", "perm", "references")]}
+    scip = {"nodes": [_n("s_h", "onEvent", "svc-b/Handler.java", 11,
+                         metadata={"scip_symbol": _sym("svc/Handler#onEvent().")}),
+                      {"id": "s_perm", "label": "RequiresRole", "file_type": "code",
+                       "source_file": "svc-b/Handler.java", "source_location": "",
+                       "metadata": {"scip_symbol": perm_sym, "scip_external": "true"}}],
+            "edges": [_e("s_h", "s_perm", "references", context="scip")]}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["external_folded"] == 1
+    assert out["reconciliation"]["demoted"] == 0
+    assert "s_perm" not in {n["id"] for n in out["nodes"]}
+
+
+def test_record_type_keeps_its_own_symbol_not_its_constructor():
+    # `public record Created(...)`: SCIP defines Created# and Created#`<init>`(). on one line
+    base = {"nodes": [_n("rec", "Created", "ev/Created.java", 5)], "edges": []}
+    scip = {"nodes": [_n("s_t", "Created", "ev/Created.java", 4, metadata={"scip_symbol": _sym("ev/Created#")}),
+                      _n("s_c", "init", "ev/Created.java", 4,
+                         metadata={"scip_symbol": _sym("ev/Created#`&lt;init&gt;`().")})], "edges": []}
+    out = reconcile_scip(base, scip)
+    rec = {n["id"]: n for n in out["nodes"]}["rec"]
+    assert rec["metadata"]["scip_symbol"].endswith("ev/Created#")
+
+
+def test_escaped_constructor_symbol_still_joins_by_type_name():
+    base = {"nodes": [_n("ctor", ".OrderService()", "svc/OrderService.java", 30)], "edges": []}
+    scip = {"nodes": [_n("s_ctor", "init", "svc/OrderService.java", 31,
+                         metadata={"scip_symbol": _sym("svc/OrderService#`&lt;init&gt;`().")})], "edges": []}
+    assert reconcile_scip(base, scip)["reconciliation"]["matched"] == 1
