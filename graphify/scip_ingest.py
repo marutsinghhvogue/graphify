@@ -660,6 +660,41 @@ def _parse_line(source_location: object) -> int | None:
 # never demoted.
 _DEMOTABLE_RELATIONS = frozenset({"calls", "references"})
 
+# How far above SCIP's definition line a tree-sitter node may start and still be
+# the same definition. Tree-sitter's Java/TS/Python decorated nodes start at the
+# first annotation/decorator; SCIP points at the name. OpenAPI-style annotation
+# blocks can run a couple of dozen lines.
+_MAX_ANNOTATION_SPAN = 40
+
+
+def _bare_name(label: str) -> str:
+    """``.getAccount()`` / ``getAccount`` / ``org.x.HttpStatus`` → the simple name."""
+    s = (label or "").strip().lstrip(".")
+    s = s.split("(", 1)[0]
+    return s.rsplit(".", 1)[-1].strip()
+
+
+def _scip_match_name(node: dict) -> str:
+    """The name a SCIP definition carries in source. A constructor's descriptor is
+    ``Type#`<init>`().`` (label ``init``); tree-sitter labels it with the type name."""
+    sym = (node.get("metadata") or {}).get("scip_symbol") or ""
+    desc = _scip_descriptor(sym) if sym else ""
+    if "<init>" in desc:
+        owner = desc.split("<init>", 1)[0].rstrip("`#")
+        return _scip_label(owner)
+    return _bare_name(node.get("label") or "")
+
+
+def _scip_fqn(symbol: str) -> str:
+    """Dotted fully-qualified name of a SCIP *type* symbol, the spelling tree-sitter
+    gives an unresolved type stub: ``org/springframework/http/HttpStatus#`` →
+    ``org.springframework.http.HttpStatus``; nested ``a/B#C#`` → ``a.B.C``. ``""`` for
+    non-type symbols."""
+    desc = _scip_descriptor(symbol)
+    if not desc.endswith("#") or "(" in desc:
+        return ""
+    return desc.rstrip("#").replace("`", "").replace("/", ".").replace("#", ".")
+
 
 def reconcile_scip(
     base: dict[str, Any],
@@ -670,13 +705,18 @@ def reconcile_scip(
 ) -> dict[str, Any]:
     """Merge a SCIP extraction into a tree-sitter extraction on node identity.
 
-    Join key is ``(path-suffix, definition-line + line_offset)``. For each SCIP
-    definition node that lands on exactly one base node, the base node is
-    canonical: it is stamped with ``metadata.scip_symbol`` and a top-level
+    Join key is ``(path-suffix, definition-line + line_offset)``. When no base node
+    starts on that line, the same-named base node in the same file that starts
+    nearest above it (within ``_MAX_ANNOTATION_SPAN`` lines) is taken: tree-sitter's
+    node for an annotated or decorated definition starts at the first annotation,
+    SCIP's at the name. Constructors (SCIP ``<init>``) match by their type's name.
+    For each SCIP definition node that lands on exactly one base node, the base
+    node is canonical: it is stamped with ``metadata.scip_symbol`` and a top-level
     ``kind``, and the SCIP node's id maps to it. SCIP nodes that match nothing
-    (external symbols, or defs tree-sitter never emitted such as interface
-    methods) are kept as new nodes; ambiguous matches are NOT guessed — they are
-    also kept as new, never linked by name.
+    (defs tree-sitter never emitted, such as fields or interface methods) are kept
+    as new nodes; ambiguous matches are NOT guessed — they are also kept as new.
+    An external SCIP type folds onto tree-sitter's unresolved stub with the same
+    dotted FQN when exactly one exists; other externals are kept as new.
 
     Edges are merged with precedence: a SCIP edge (type-resolved, ``context:
     "scip"``) supersedes a base edge on the same ``(source, target, relation)``;
@@ -706,7 +746,13 @@ def reconcile_scip(
     # sits on the same line as the first definition — it must not shadow a real
     # symbol match).
     by_name_line: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    # (basename, simple name) → base definitions, for the annotation-offset fallback
+    by_file_name: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    # dotted FQN → unresolved base type stubs (no source file), for external folding
+    stubs_by_fqn: dict[str, list[dict]] = defaultdict(list)
     for n in base_nodes:
+        if not n.get("source_file"):
+            stubs_by_fqn[(n.get("label") or "").strip()].append(n)
         line = _parse_line(n.get("source_location"))
         if line is None:
             continue
@@ -714,28 +760,55 @@ def reconcile_scip(
         if (n.get("label") or "") == base_name:
             continue  # file-container node, not a symbol definition
         by_name_line[(base_name, line)].append(n)
+        by_file_name[(base_name, _bare_name(n.get("label") or ""))].append(n)
 
     id_map: dict[str, str] = {}
     scip_only: list[dict] = []
     matched = ambiguous = external = unmatched = 0
+    matched_by_name = external_folded = 0
 
     for sn in scip_nodes:
         sid = sn["id"]
         meta = sn.get("metadata") or {}
         if meta.get("scip_external"):
-            id_map[sid] = sid
-            scip_only.append(sn)
+            # Fold an external type onto tree-sitter's stub for the same FQN, so
+            # both graphs' references to it share one node (and SCIP's edge can
+            # supersede, rather than "contradict", the stub edge).
+            stub = stubs_by_fqn.get(_scip_fqn(meta.get("scip_symbol") or ""), [])
+            if len(stub) == 1:
+                id_map[sid] = stub[0]["id"]
+                external_folded += 1
+            else:
+                id_map[sid] = sid
+                scip_only.append(sn)
             external += 1
             continue
         sfile = sn.get("source_file") or ""
+        sbase = sfile.replace("\\", "/").rsplit("/", 1)[-1]
         sline = _parse_line(sn.get("source_location"))
         cand: list[dict] = []
         if sline is not None:
-            key = (sfile.replace("\\", "/").rsplit("/", 1)[-1], sline + line_offset)
+            key = (sbase, sline + line_offset)
             cand = [
                 bn for bn in by_name_line.get(key, [])
                 if _path_suffix_match(sfile, bn.get("source_file") or "")
             ]
+            if not cand:
+                # Tree-sitter's node for an annotated/decorated definition starts at
+                # the first annotation; SCIP points at the name. Take the same-named
+                # node in the same file that starts nearest above, within the span.
+                target = sline + line_offset
+                above = [
+                    (ln, bn) for bn in by_file_name.get((sbase, _scip_match_name(sn)), [])
+                    if _path_suffix_match(sfile, bn.get("source_file") or "")
+                    and (ln := _parse_line(bn.get("source_location"))) is not None
+                    and 0 < target - ln <= _MAX_ANNOTATION_SPAN
+                ]
+                if above:
+                    nearest = max(ln for ln, _ in above)
+                    cand = [bn for ln, bn in above if ln == nearest]
+                    if len(cand) == 1:
+                        matched_by_name += 1
         if len(cand) == 1:
             canon = cand[0]
             id_map[sid] = canon["id"]
@@ -768,37 +841,71 @@ def reconcile_scip(
     for e in base_edges:
         merged[(e.get("source"), e.get("target"), e.get("relation"))] = e
 
-    # Callers SCIP actually resolved (source of a remapped SCIP call/reference) and
-    # the exact edges it confirmed — used for the per-caller demote below.
-    scip_resolved_callers: set = set()
+    # What SCIP resolved, per caller: {canonical caller: {simple name: {targets}}}.
+    # A reference is credited to its innermost SCIP definition AND to every
+    # definition that owns it in the symbol path (`pkg/X#clock.` is owned by
+    # `pkg/X#`), because tree-sitter attributes a field's type reference to the
+    # class, a node granularity SCIP keeps separate.
     scip_confirmed: set = set()
+    label_of = {n["id"]: n.get("label") or "" for n in base_nodes}
+    label_of.update({n["id"]: n.get("label") or "" for n in scip_nodes if n["id"] not in label_of})
+    desc_of: dict[str, str] = {}
+    for sn in scip_nodes:
+        sym = (sn.get("metadata") or {}).get("scip_symbol")
+        if sym and not (sn.get("metadata") or {}).get("scip_external"):
+            desc_of[sn["id"]] = _scip_descriptor(sym)
+    canon_of_desc = {d: id_map.get(sid, sid) for sid, d in desc_of.items()}
+
+    def _owners(desc: str) -> list[str]:
+        cuts = [i + 1 for i, ch in enumerate(desc[:-1]) if ch == "#"]
+        cuts += [m.end() for m in re.finditer(r"\)\.", desc[:-2])]
+        return [desc[:c] for c in cuts]
+
+    resolved: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
     remapped_scip: list[dict] = []
     for e in scip_edges:
+        orig_src = e.get("source")
         e = dict(e)
-        e["source"] = id_map.get(e.get("source"), e.get("source"))
+        e["source"] = id_map.get(orig_src, orig_src)
         e["target"] = id_map.get(e.get("target"), e.get("target"))
         remapped_scip.append(e)
-        if e.get("relation") in _DEMOTABLE_RELATIONS:
-            scip_resolved_callers.add(e.get("source"))
-            scip_confirmed.add((e.get("source"), e.get("target"), e.get("relation")))
+        if e.get("relation") not in _DEMOTABLE_RELATIONS:
+            continue
+        scip_confirmed.add((e.get("source"), e.get("target"), e.get("relation")))
+        name = _bare_name(label_of.get(e.get("target"), ""))
+        callers = {e["source"]} | {
+            canon_of_desc[o] for o in _owners(desc_of.get(orig_src, "")) if o in canon_of_desc
+        }
+        for c in callers:
+            resolved[c][name].add(e["target"])
+    stub_ids = {n["id"] for n in base_nodes if not n.get("source_file")}
     for e in remapped_scip:
         k = (e.get("source"), e.get("target"), e.get("relation"))
         cur = merged.get(k)
         if cur is None or _prec(e) >= _prec(cur):
             merged[k] = e
 
-    # Per-caller demote: a base call/reference from a caller SCIP resolved, that
-    # SCIP did not confirm, is a probable name collision. Demote (keep, retag
-    # AMBIGUOUS) by default; drop only under strict.
+    def _contradicted(e: dict, k: tuple) -> bool:
+        """SCIP resolved the SAME name from this caller (or a definition it owns) to
+        a different target: the User.save / Logger.save collision. A name SCIP says
+        nothing about is unconfirmed, not contradicted (SCIP is not complete: no
+        enclosing definition for class annotations, dynamic calls), so it is kept.
+        A same-named target confirms a tree-sitter edge to an unresolved stub."""
+        if e.get("context") == "scip" or e.get("relation") not in _DEMOTABLE_RELATIONS:
+            return False
+        if k in scip_confirmed:
+            return False
+        targets = resolved.get(e.get("source"), {}).get(_bare_name(label_of.get(e.get("target"), "")))
+        if not targets or e.get("target") in targets:
+            return False
+        return e.get("target") not in stub_ids
+
+    # Per-caller demote: demote (keep, retag AMBIGUOUS) a contradicted base
+    # call/reference by default; drop it only under strict.
     demoted = dropped = 0
     out_edges: list[dict] = []
     for k, e in merged.items():
-        contradicted = (
-            e.get("context") != "scip"
-            and e.get("relation") in _DEMOTABLE_RELATIONS
-            and e.get("source") in scip_resolved_callers
-            and k not in scip_confirmed
-        )
+        contradicted = _contradicted(e, k)
         if not contradicted:
             out_edges.append(e)
             continue
@@ -818,6 +925,8 @@ def reconcile_scip(
         "reconciliation": {
             "scip_nodes": len(scip_nodes),
             "matched": matched,
+            "matched_by_name": matched_by_name,
+            "external_folded": external_folded,
             "scip_only_new": unmatched,
             "ambiguous_kept_new": ambiguous,
             "external": external,

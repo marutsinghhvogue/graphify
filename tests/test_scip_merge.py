@@ -78,17 +78,36 @@ def test_base_edge_scip_did_not_reproduce_is_preserved():
 # --- per-caller demote (recall-safety) ---
 
 def _collision_case():
-    # a really calls b (SCIP-resolved); tree-sitter also guessed a→c (name collision)
+    # a really calls b and Logger.save (SCIP-resolved); tree-sitter bound the
+    # `save()` call by name to the wrong save (c, User.save): a name collision.
+    base = {
+        "nodes": [_n("a", "a()", "m.py", 2), _n("b", "b()", "m.py", 5), _n("c", "save()", "m.py", 8),
+                  _n("l", "save()", "log.py", 3)],
+        "edges": [_e("a", "b", "calls", "INFERRED", context="call"),
+                  _e("a", "c", "calls", "INFERRED", context="call")],
+    }
+    scip = {
+        "nodes": [_n("sa", "a()", "m.py", 1), _n("sb", "b()", "m.py", 4), _n("sl", "save()", "log.py", 2)],
+        "edges": [_e("sa", "sb", "calls", "EXTRACTED", context="scip"),
+                  _e("sa", "sl", "calls", "EXTRACTED", context="scip")],
+    }
+    return base, scip
+
+
+def test_edge_scip_is_silent_about_is_kept_not_demoted():
+    # SCIP resolved a→b but said nothing about `save`: unconfirmed, not
+    # contradicted (SCIP is not complete), so the tree-sitter edge is untouched.
     base = {
         "nodes": [_n("a", "a()", "m.py", 2), _n("b", "b()", "m.py", 5), _n("c", "save()", "m.py", 8)],
         "edges": [_e("a", "b", "calls", "INFERRED", context="call"),
                   _e("a", "c", "calls", "INFERRED", context="call")],
     }
-    scip = {
-        "nodes": [_n("sa", "a()", "m.py", 1), _n("sb", "b()", "m.py", 4)],
-        "edges": [_e("sa", "sb", "calls", "EXTRACTED", context="scip")],
-    }
-    return base, scip
+    scip = {"nodes": [_n("sa", "a()", "m.py", 1), _n("sb", "b()", "m.py", 4)],
+            "edges": [_e("sa", "sb", "calls", "EXTRACTED", context="scip")]}
+    out = reconcile_scip(base, scip)
+    calls = {(e["source"], e["target"]): e for e in out["edges"] if e["relation"] == "calls"}
+    assert calls[("a", "c")]["confidence"] == "INFERRED"
+    assert out["reconciliation"]["demoted"] == 0
 
 
 def test_per_caller_demote_of_contradicted_call():
@@ -227,3 +246,104 @@ def test_merge_scip_cli(monkeypatch, tmp_path, capsys):
     targets = {nodes_by_id[e["target"]].get("metadata", {}).get("scip_symbol", "") for e in scip_calls}
     assert any("User#save()." in s for s in targets)
     assert any("Logger#save()." in s for s in targets)
+
+
+# --- Java/Spring shapes (scip-java on a Spring Boot service) ---
+
+def _sym(desc):
+    return "semanticdb maven maven/com.acme/svc 1.0 " + desc
+
+
+def test_annotated_method_joins_to_node_starting_at_its_annotations():
+    # tree-sitter's node starts at `@Bean` (L24); SCIP points at the name (0-based 25 = L26)
+    base = {"nodes": [_n("jm", ".mapper()", "cfg/MapperConfig.java", 24)], "edges": []}
+    scip = {"nodes": [_n("s_jm", "mapper", "cfg/MapperConfig.java", 25,
+                         metadata={"scip_symbol": _sym("cfg/MapperConfig#mapper()."),
+                                   "scip_kind": "method"})], "edges": []}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["matched"] == 1 and out["reconciliation"]["matched_by_name"] == 1
+    assert "s_jm" not in {n["id"] for n in out["nodes"]}
+
+
+def test_annotation_fallback_picks_the_overload_nearest_above():
+    base = {"nodes": [_n("r1", ".read()", "web/VisitResource.java", 56),
+                      _n("r2", ".read()", "web/VisitResource.java", 66)], "edges": []}
+    scip = {"nodes": [_n("s2", "read", "web/VisitResource.java", 67,
+                         metadata={"scip_symbol": _sym("web/VisitResource#read(+1).")})], "edges": [
+            ]}
+    out = reconcile_scip(base, scip)
+    r2 = {n["id"]: n for n in out["nodes"]}["r2"]
+    assert r2["metadata"]["scip_symbol"].endswith("read(+1).")
+
+
+def test_annotation_fallback_is_bounded_and_needs_the_same_name():
+    base = {"nodes": [_n("far", ".run()", "A.java", 1), _n("other", ".stop()", "A.java", 90)], "edges": []}
+    scip = {"nodes": [_n("s_run", "run", "A.java", 99,
+                         metadata={"scip_symbol": _sym("A#run().")})], "edges": []}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["matched"] == 0      # same name is 98 lines up; other name nearby
+
+
+def test_constructor_joins_by_its_type_name():
+    base = {"nodes": [_n("ctor", ".ReminderJob()", "svc/ReminderJob.java", 30)], "edges": []}
+    scip = {"nodes": [_n("s_ctor", "init", "svc/ReminderJob.java", 31,
+                         metadata={"scip_symbol": _sym("svc/ReminderJob#`<init>`().")})], "edges": []}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["matched"] == 1
+
+
+def test_external_type_folds_onto_the_tree_sitter_stub_with_the_same_fqn():
+    stub = {"id": "stub_hs", "label": "org.springframework.http.HttpStatus", "file_type": "code",
+            "source_file": "", "source_location": ""}
+    base = {"nodes": [_n("h", ".statusFor()", "web/C.java", 10), stub],
+            "edges": [_e("h", "stub_hs", "references")]}
+    scip = {"nodes": [_n("s_h", "statusFor", "web/C.java", 9,
+                         metadata={"scip_symbol": _sym("web/C#statusFor().")}),
+                      {"id": "s_hs", "label": "HttpStatus", "file_type": "code", "source_file": "web/C.java",
+                       "source_location": "", "metadata": {
+                           "scip_symbol": "semanticdb maven maven/org.springframework/spring-web 7.0 "
+                                          "org/springframework/http/HttpStatus#", "scip_external": "true"}}],
+            "edges": [_e("s_h", "s_hs", "references", context="scip")]}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["external_folded"] == 1
+    refs = [e for e in out["edges"] if e["relation"] == "references"]
+    assert [(e["source"], e["target"], e.get("context")) for e in refs] == [("h", "stub_hs", "scip")]
+    assert out["reconciliation"]["demoted"] == 0
+
+
+def test_stub_reference_confirmed_by_a_same_named_scip_target():
+    # tree-sitter's unresolved `Builder` stub vs SCIP's nested RouteClient#Builder#
+    stub = {"id": "stub_b", "label": "Builder", "file_type": "code", "source_file": "", "source_location": ""}
+    base = {"nodes": [_n("c", ".RouteClient()", "R.java", 20), _n("b", "Builder", "R.java", 40), stub],
+            "edges": [_e("c", "stub_b", "references")]}
+    scip = {"nodes": [_n("s_c", "init", "R.java", 20, metadata={"scip_symbol": _sym("R#`<init>`().")}),
+                      _n("s_b", "Builder", "R.java", 39, metadata={"scip_symbol": _sym("R#Builder#")})],
+            "edges": [_e("s_c", "s_b", "references", context="scip")]}
+    out = reconcile_scip(base, scip)
+    ref = [e for e in out["edges"] if e["source"] == "c" and e["target"] == "stub_b"]
+    assert ref and ref[0]["confidence"] == "EXTRACTED"
+    assert out["reconciliation"]["demoted"] == 0
+
+
+def test_field_type_reference_credited_to_the_owning_class():
+    # tree-sitter: class --references--> TimeSource. SCIP attributes it to the
+    # field `clock` (a node tree-sitter lacks), which the class owns.
+    base = {"nodes": [_n("impl", "CartServiceImpl", "svc/CartServiceImpl.java", 25),
+                      _n("clock", "TimeSource", "cfg/TimeSource.java", 7),
+                      _n("other_clock", "TimeSource", "legacy/TimeSource.java", 3)],
+            "edges": [_e("impl", "clock", "references")]}
+    scip = {"nodes": [_n("s_impl", "CartServiceImpl", "svc/CartServiceImpl.java", 24,
+                         metadata={"scip_symbol": _sym("svc/CartServiceImpl#")}),
+                      _n("s_field", "clock", "svc/CartServiceImpl.java", 30,
+                         metadata={"scip_symbol": _sym("svc/CartServiceImpl#clock.")}),
+                      _n("s_clock", "TimeSource", "cfg/TimeSource.java", 6,
+                         metadata={"scip_symbol": _sym("cfg/TimeSource#")})],
+            "edges": [_e("s_field", "s_clock", "references", context="scip")]}
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["demoted"] == 0
+    # ...but had tree-sitter bound the class to the OTHER TimeSource, that contradicts SCIP
+    base["edges"] = [_e("impl", "other_clock", "references")]
+    for n in base["nodes"]:
+        n.pop("metadata", None); n.pop("kind", None)
+    out = reconcile_scip(base, scip)
+    assert out["reconciliation"]["demoted"] == 1

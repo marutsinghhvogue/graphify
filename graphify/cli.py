@@ -5754,9 +5754,10 @@ def dispatch_command(cmd: str) -> None:
                    else f"demoted {stats.get('demoted', 0)} to AMBIGUOUS")
         print(
             f"Merged SCIP index into {out}\n"
-            f"  SCIP nodes {stats['scip_nodes']}: matched {stats['matched']}, "
+            f"  SCIP nodes {stats['scip_nodes']}: matched {stats['matched']} "
+            f"({stats.get('matched_by_name', 0)} past annotations), "
             f"scip-only {stats['scip_only_new']}, ambiguous-kept {stats['ambiguous_kept_new']}, "
-            f"external {stats['external']}\n"
+            f"external {stats['external']} ({stats.get('external_folded', 0)} folded onto stubs)\n"
             f"  per-caller contradicted calls: {_demote}\n"
             f"  graph now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
