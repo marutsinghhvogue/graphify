@@ -5679,14 +5679,17 @@ def dispatch_command(cmd: str) -> None:
             sys.exit(1)
         print(_format_call_edges(graph, query, incoming=(cmd == "callers")))
     elif cmd == "merge-scip":
-        # graphify merge-scip <index.scip> [--graph graph.json] [--out path] [--force]
+        # graphify merge-scip <index.scip | estate-dir> [--graph graph.json] [--out path] [--force]
         # Merge a precise SCIP index onto the tree-sitter graph (merge-on-identity
         # on file:line), re-cluster, and write the result. SCIP calls/references/
         # implements supersede tree-sitter's heuristic edges on identical endpoints;
         # SCIP-only symbols (e.g. interface methods) are added as new nodes.
+        # Given a directory, merges every module's index.scip under it (the graph
+        # must come from `graphify extract <that dir>`), providers first, and joins
+        # cross-module references on their SCIP symbol.
         if len(sys.argv) < 3:
-            print("Usage: graphify merge-scip <index.scip> [--graph graph.json] [--out path] [--force] [--strict-scip]",
-                  file=sys.stderr)
+            print("Usage: graphify merge-scip <index.scip | estate-dir> [--graph graph.json] [--out path] "
+                  "[--force] [--strict-scip]", file=sys.stderr)
             sys.exit(1)
         scip_path = Path(sys.argv[2])
         graph_path = _default_graph_path()
@@ -5719,7 +5722,7 @@ def dispatch_command(cmd: str) -> None:
             sys.exit(1)
         out = Path(out_path).resolve() if out_path else gp
         try:
-            from graphify.scip_ingest import ingest_scip_index, reconcile_scip
+            from graphify.scip_ingest import ingest_scip_index, merge_scip_estate, reconcile_scip
         except Exception as exc:
             print(f"error: SCIP support unavailable ({exc}). Install the 'scip' extra: "
                   f"pip install 'graphifyy[scip]'", file=sys.stderr)
@@ -5732,12 +5735,22 @@ def dispatch_command(cmd: str) -> None:
         raw = json.loads(gp.read_text(encoding="utf-8"))
         if "edges" not in raw and "links" in raw:
             raw = dict(raw, edges=raw["links"])
+        estate = scip_path.is_dir()
         try:
-            scip = ingest_scip_index(scip_path)
+            if estate:
+                merged = merge_scip_estate(
+                    raw, scip_path, strict=strict_scip,
+                    progress=lambda mod, st: print(
+                        f"  {mod}: matched {st['matched']}, demoted {st['demoted']}", file=sys.stderr),
+                )
+                if not merged["modules"]:
+                    print(f"error: no index.scip found under {scip_path}", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                merged = reconcile_scip(raw, ingest_scip_index(scip_path), strict=strict_scip)
         except Exception as exc:
             print(f"error: could not read SCIP index: {exc}", file=sys.stderr)
             sys.exit(1)
-        merged = reconcile_scip(raw, scip, strict=strict_scip)
         errs = validate_extraction(merged)
         if errs:
             print(f"warning: {len(errs)} validation issue(s) after merge; first: {errs[0]}",
@@ -5759,7 +5772,9 @@ def dispatch_command(cmd: str) -> None:
             f"scip-only {stats['scip_only_new']}, ambiguous-kept {stats['ambiguous_kept_new']}, "
             f"external {stats['external']} ({stats.get('external_folded', 0)} folded onto stubs)\n"
             f"  per-caller contradicted calls: {_demote}\n"
-            f"  graph now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+            + (f"  modules {stats.get('modules', 0)}, merged providers first; "
+               f"{stats.get('externals_joined_after', 0)} cross-module references joined after\n" if estate else "")
+            + f"  graph now: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
         )
     elif cmd == "export-pg":
         # graphify export-pg [graph.json] --repo R --source S [--dsn DSN]

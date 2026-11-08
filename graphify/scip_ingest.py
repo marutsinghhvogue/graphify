@@ -980,3 +980,132 @@ def reconcile_scip(
             "dropped_strict": dropped,
         },
     }
+
+
+# ── estate (multi-module) merge ─────────────────────────────────────────────
+#
+# A monorepo or a checkout of several services holds one index.scip per build
+# module. Each index's paths are relative to its module, and each module sees the
+# others only as external symbols. merge_scip_estate prefixes every index with
+# its module path, merges providers before their consumers (so an external
+# reference to a symbol another module defines folds onto that definition before
+# demotion is decided), and finally joins any externals still pointing at symbols
+# defined elsewhere (dependency cycles).
+
+_ESTATE_SKIP_DIRS = frozenset({".git", "node_modules", "target", "build", "dist", ".venv", "venv",
+                               "__pycache__", ".gradle", ".idea"})
+
+
+def discover_scip_indexes(root: str | Path) -> list[Path]:
+    """Every ``index.scip`` under ``root``, skipping build output and VCS dirs."""
+    import os
+
+    root = Path(root)
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _ESTATE_SKIP_DIRS)
+        if "index.scip" in filenames:
+            found.append(Path(dirpath) / "index.scip")
+    return found
+
+
+def scip_index_symbols(path: str | Path) -> tuple[set[str], set[str]]:
+    """``(defined, referenced)`` emittable symbols of one index: a cheap pass that
+    decides merge order without building nodes."""
+    from graphify import scip_pb2  # lazy: needs protobuf ('scip' extra)
+
+    index = scip_pb2.Index()
+    index.ParseFromString(Path(path).read_bytes())
+    defined: set[str] = set()
+    referenced: set[str] = set()
+    for document in index.documents:
+        for occ in document.occurrences:
+            if not _scip_emittable(occ.symbol):
+                continue
+            (defined if occ.symbol_roles & _ROLE_DEFINITION else referenced).add(occ.symbol)
+    return defined, referenced - defined
+
+
+def order_scip_modules(symbols: dict[Path, tuple[set[str], set[str]]]) -> list[Path]:
+    """Providers first: module A precedes B when B references symbols A defines.
+    Dependency cycles fall back to path order (the final symbol join covers them)."""
+    defined_by: dict[str, Path] = {}
+    for path in sorted(symbols):
+        for sym in symbols[path][0]:
+            defined_by.setdefault(sym, path)
+    deps = {
+        path: {defined_by[s] for s in referenced if s in defined_by and defined_by[s] != path}
+        for path, (_, referenced) in symbols.items()
+    }
+    ordered: list[Path] = []
+    placed: set[Path] = set()
+    while len(ordered) < len(deps):
+        ready = sorted(p for p in deps if p not in placed and deps[p] <= placed)
+        if not ready:  # cycle: take the earliest remaining module
+            ready = [sorted(p for p in deps if p not in placed)[0]]
+        for p in ready:
+            ordered.append(p)
+            placed.add(p)
+    return ordered
+
+
+def merge_scip_estate(
+    base: dict[str, Any],
+    root: str | Path,
+    *,
+    strict: bool = False,
+    progress: Any = None,
+) -> dict[str, Any]:
+    """Merge every module's ``index.scip`` under ``root`` onto ``base``, whose
+    ``source_file`` paths are relative to ``root`` (``graphify extract <root>``).
+
+    Returns ``{"nodes", "edges", "reconciliation": totals, "modules": [...]}``;
+    ``modules`` lists each module's prefix and its own reconciliation stats in merge
+    order. ``progress(prefix, stats)`` is called after each module when given.
+    """
+    root = Path(root)
+    indexes = discover_scip_indexes(root)
+    order = order_scip_modules({p: scip_index_symbols(p) for p in indexes})
+    current = {"nodes": list(base.get("nodes", [])), "edges": list(base.get("edges", base.get("links", [])))}
+    totals: dict[str, int] = {}
+    modules: list[dict[str, Any]] = []
+    for idx in order:
+        prefix = idx.parent.relative_to(root).as_posix()
+        scip = ingest_scip_index(idx)
+        if prefix and prefix != ".":
+            for item in scip["nodes"] + scip["edges"]:
+                if item.get("source_file"):
+                    item["source_file"] = f"{prefix}/{item['source_file']}"
+        out = reconcile_scip(current, scip, strict=strict)
+        current = {"nodes": out["nodes"], "edges": out["edges"]}
+        for k, v in out["reconciliation"].items():
+            totals[k] = totals.get(k, 0) + v
+        modules.append({"module": prefix or ".", **out["reconciliation"]})
+        if progress:
+            progress(prefix or ".", out["reconciliation"])
+
+    # Externals still pointing at a symbol some module defines (cycles): join them.
+    defined: dict[str, str] = {}
+    for n in current["nodes"]:
+        m = n.get("metadata") if isinstance(n.get("metadata"), dict) else {}
+        if m.get("scip_symbol") and not m.get("scip_external"):
+            defined.setdefault(m["scip_symbol"], n["id"])
+    remap = {}
+    for n in current["nodes"]:
+        m = n.get("metadata") if isinstance(n.get("metadata"), dict) else {}
+        if m.get("scip_external") and m.get("scip_symbol") in defined:
+            remap[n["id"]] = defined[m["scip_symbol"]]
+    nodes = [n for n in current["nodes"] if n["id"] not in remap]
+    seen: set[tuple] = set()
+    edges: list[dict] = []
+    for e in current["edges"]:
+        e = {**e, "source": remap.get(e.get("source"), e.get("source")),
+             "target": remap.get(e.get("target"), e.get("target"))}
+        key = (e["source"], e["target"], e.get("relation"))
+        if e["source"] == e["target"] or key in seen:
+            continue
+        seen.add(key)
+        edges.append(e)
+    totals["externals_joined_after"] = len(remap)
+    totals["modules"] = len(order)
+    return {"nodes": nodes, "edges": edges, "reconciliation": totals, "modules": modules}
