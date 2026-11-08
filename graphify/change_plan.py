@@ -43,7 +43,7 @@ from graphify.service_profiles import (
 
 # Relations that cross a service/process boundary — a hit reached via one of these
 # means the blast radius left the seed's own service (a downstream-impacted service).
-_CROSS_BOUNDARY_RELATIONS = {"calls_service", "triggers", "consumes"}
+_CROSS_BOUNDARY_RELATIONS = {"calls_service", "triggers", "consumes", "subscribes_to", "published_by"}
 
 
 @dataclass(frozen=True)

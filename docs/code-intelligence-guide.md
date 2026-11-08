@@ -39,6 +39,7 @@ in the cross-boundary edges:
 | `--schedulers` | In-code timers (`@Scheduled`, `@Cron`, `@scheduled_job`, `@periodic_task`) | `triggers` · EXTRACTED |
 | `--bindings` | **All** framework constructs — schedulers + events + DI + your own rules (superset of `--schedulers`) | `triggers` / `consumes` / `injects` |
 | `--cloud-schedulers` | Cloud/IaC schedules (Terraform, k8s CronJob, serverless.yml) | `triggers` · INFERRED |
+| `--routing-registry SRC` | Runtime-routed events: who publishes each event type, who subscribes, from a routing registry | `subscribes_to` / `published_by` |
 
 ```bash
 graphify extract ./estate --cross-service --bindings --cloud-schedulers --out ./out
@@ -187,6 +188,55 @@ serverless links the named handler.
 > without it.
 
 ---
+
+## 5a. Runtime-routed events (routing registry)
+
+Some estates deliver events through a registry at runtime: the publisher asks for
+the subscribers of an event type and posts to each subscription URL. The
+publisher's code never names a receiver, so the link exists only in the
+registry's data. `--routing-registry` reads it:
+
+```bash
+graphify extract ./services --cross-service --routing-registry docs/seed/routing-registry.sql
+graphify extract ./services --routing-registry postgresql://ro@db.example/events
+```
+
+Sources: a SQL seed or dump (`INSERT INTO producers|subscriptions …`), a YAML/JSON
+export (`{producers: [...], subscriptions: [...]}`), or a Postgres DSN for the live
+`producers` / `subscriptions` tables. Columns: `service_name`, `event_type`, `url`,
+`method`.
+
+- Each **subscription** URL resolves to its handler through the endpoint catalog
+  that `--cross-service` builds (context paths included).
+- Each **producer** resolves to the code in that service that declares the event
+  type (`return Events.X`, an `EVENT_TYPE = "X"` constant; else a use of the
+  constant).
+
+Edges run `handler --subscribes_to--> event --published_by--> publisher`, so blast
+radius from an event class reaches its subscribers in other services.
+Subscriptions whose URL matches no endpoint in code are printed as possible
+**registry drift**.
+
+## 5b. Precise symbols with SCIP (one repo or a whole estate)
+
+[SCIP](https://github.com/sourcegraph/scip) indexers (`scip-java`, `scip-go`,
+`scip-typescript`, …) compile the code and record exact definitions and
+references. Merging an index replaces tree-sitter's name-matched calls with
+type-exact ones. It also adds calls tree-sitter can't see, such as Lombok-generated
+methods. A tree-sitter edge that SCIP resolves to a *different* same-named target
+is demoted to AMBIGUOUS:
+
+```bash
+(cd svc && scip-java index)                      # → svc/index.scip
+graphify merge-scip svc/index.scip               # one module
+
+graphify extract ./services --cross-service      # an estate of modules…
+graphify merge-scip ./services                   # …every index.scip under it
+```
+
+Given a directory, `merge-scip` merges providers before consumers, so a call into
+a shared library joins onto that library's definition through its SCIP symbol,
+not onto a stub.
 
 ## 6. Serve the graph to an AI agent (MCP)
 

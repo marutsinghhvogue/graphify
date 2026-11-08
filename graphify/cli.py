@@ -3747,7 +3747,7 @@ def dispatch_command(cmd: str) -> None:
                 "[--no-gitignore] [--code-only] [--no-dedup] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
                 "[--api-timeout S] [--postgres DSN] [--cargo] [--cross-service] [--schedulers] "
-                "[--bindings] [--cloud-schedulers] [--taint] [--allow-partial] "
+                "[--bindings] [--cloud-schedulers] [--routing-registry SRC] [--taint] [--allow-partial] "
                 "[--allow-dedup-shrink] [--timing]",
                 file=sys.stderr,
             )
@@ -3773,6 +3773,7 @@ def dispatch_command(cmd: str) -> None:
         cli_schedulers: bool = False
         cli_bindings: bool = False
         cli_cloud_schedulers: bool = False
+        cli_routing_registry: str | None = None
         cli_taint: bool = False
         cli_allow_partial: bool = False
         # --allow-dedup-shrink: write a graph that is smaller because dedup
@@ -3914,6 +3915,10 @@ def dispatch_command(cmd: str) -> None:
             elif a == "--cloud-schedulers":
                 cli_cloud_schedulers = True
                 i += 1
+            elif a == "--routing-registry" and i + 1 < len(args):
+                cli_routing_registry = args[i + 1]; i += 2
+            elif a.startswith("--routing-registry="):
+                cli_routing_registry = a.split("=", 1)[1]; i += 1
             elif a == "--taint":
                 cli_taint = True
                 i += 1
@@ -4908,6 +4913,37 @@ def dispatch_command(cmd: str) -> None:
                   + (f" ({_clby})" if _clby else "")
                   + f"; {_cl.get('resolved', 0)} handler-linked, {_resolved} resolved onto AST nodes")
 
+        # Runtime-routed events: an event-routing registry (SQL seed/dump, YAML/JSON
+        # export, or a Postgres DSN) says which services publish and which subscribe
+        # to each event type, with each subscription's URL. Subscriptions resolve to
+        # handlers via the contract endpoint catalog; producers to the code that
+        # declares the event type. Edges: handler --subscribes_to--> event
+        # --published_by--> publisher, so blast radius crosses the event bus.
+        registry_result: dict = {"nodes": [], "edges": []}
+        if cli_routing_registry:
+            from graphify.contract_introspect import reconcile_contract
+            from graphify.registry_introspect import registry_graph
+            print("[graphify extract] reading the event-routing registry...")
+            src = cli_routing_registry
+            if not src.startswith(("postgres://", "postgresql://")) and not Path(src).exists():
+                print(f"error: routing registry not found: {src}", file=sys.stderr)
+                sys.exit(1)
+            try:
+                registry_raw = registry_graph(target, src)
+            except (OSError, ImportError, ValueError) as exc:
+                print(f"error: could not read routing registry: {exc}", file=sys.stderr)
+                sys.exit(1)
+            registry_result = _relativize_emitted(reconcile_contract(ast_result, registry_raw), Path(target))
+            _rg = registry_raw["stats"]
+            print(f"[graphify extract] routing registry: {_rg['event_types']} event types; "
+                  f"{_rg['subscriptions_resolved']}/{_rg['subscriptions']} subscriptions resolved to handlers; "
+                  f"publishers found for {_rg['publishers_anchored']}")
+            if _rg["unresolved_subscriptions"]:
+                print(f"[graphify extract] routing registry: {len(_rg['unresolved_subscriptions'])} "
+                      f"subscription(s) point at no endpoint in code (registry drift?): "
+                      + ", ".join(_rg["unresolved_subscriptions"][:5])
+                      + (" …" if len(_rg["unresolved_subscriptions"]) > 5 else ""))
+
         # Taint (Tier C): PDG + inter-procedural source→sink analysis. Emits the
         # finding-relevant `statement` nodes + `flows_to` edges (INFERRED) so
         # blast radius can reach tainted flows and the SDK can render a taint
@@ -4940,8 +4976,8 @@ def dispatch_command(cmd: str) -> None:
         from graphify.llm import _stamp_semantic_origin as _stamp_sem
         _stamp_sem(sem_result)
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])) + list(bind_result.get("nodes", [])) + list(cloud_result.get("nodes", [])) + list(taint_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])) + list(bind_result.get("edges", [])) + list(cloud_result.get("edges", [])) + list(taint_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])) + list(xsvc_result.get("nodes", [])) + list(sched_result.get("nodes", [])) + list(bind_result.get("nodes", [])) + list(cloud_result.get("nodes", [])) + list(registry_result.get("nodes", [])) + list(taint_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])) + list(xsvc_result.get("edges", [])) + list(sched_result.get("edges", [])) + list(bind_result.get("edges", [])) + list(cloud_result.get("edges", [])) + list(registry_result.get("edges", [])) + list(taint_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),
@@ -5040,6 +5076,8 @@ def dispatch_command(cmd: str) -> None:
                 and not bind_result.get("edges")
                 and not cloud_result.get("nodes")
                 and not cloud_result.get("edges")
+                and not registry_result.get("nodes")
+                and not registry_result.get("edges")
                 and not taint_result.get("nodes")
                 and not taint_result.get("edges")
             ):

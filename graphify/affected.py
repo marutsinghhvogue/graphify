@@ -46,6 +46,11 @@ DEFAULT_AFFECTED_RELATIONS = (
     # dependency injection: changing an injected type affects the classes that
     # depend on it (name-resolved, INFERRED tier).
     "injects",
+    # runtime-routed events (routing registry): a subscriber handler depends on the
+    # event, the event on the code that publishes it, so blast radius from a
+    # publisher reaches every subscriber in other services.
+    "subscribes_to",
+    "published_by",
 )
 
 
